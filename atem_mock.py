@@ -429,6 +429,8 @@ def bootstrap_configuration(profile):
     multiview_properties = {}
     aux_sources = {}
     video_mode = None
+    fairlight_master = None
+    fairlight_sources = {}
 
     for payload in initial_state(profile):
         for name, body in parse_commands(payload):
@@ -483,6 +485,12 @@ def bootstrap_configuration(profile):
                 aux_sources[body[0]] = struct.unpack("!H", body[2:4])[0]
             elif name == "VidM" and len(body) >= 1:
                 video_mode = body[0]
+            elif name == "FAMP" and len(body) >= 20:
+                fairlight_master = bytearray(body)
+            elif name == "FASP" and len(body) >= 52:
+                index = struct.unpack("!H", body[0:2])[0]
+                source = struct.unpack("!q", body[8:16])[0]
+                fairlight_sources[(index, source)] = bytearray(body)
 
     return {
         "inputs": inputs,
@@ -493,6 +501,8 @@ def bootstrap_configuration(profile):
         "multiview_properties": multiview_properties,
         "aux_sources": aux_sources,
         "video_mode": video_mode,
+        "fairlight_master": fairlight_master,
+        "fairlight_sources": fairlight_sources,
     }
 
 
@@ -519,6 +529,14 @@ def state_multiview_properties(mv_id, props):
 
 def state_video_mode(mode):
     return command("VidM", struct.pack("!B3x", mode))
+
+
+def state_fairlight_master(raw_body):
+    return command("FAMP", bytes(raw_body))
+
+
+def state_fairlight_source(raw_body):
+    return command("FASP", bytes(raw_body))
 
 
 def bootstrap_mix_effects(profile):
@@ -852,6 +870,8 @@ def main():
     multiviewers = config_state["multiviewers"]
     multiview_properties = config_state["multiview_properties"]
     video_mode = config_state["video_mode"]
+    fairlight_master = config_state["fairlight_master"]
+    fairlight_sources = config_state["fairlight_sources"]
     auto_transitions = {}
 
     print(
@@ -1639,6 +1659,60 @@ def main():
                         print(
                             f"[{stamp()}] M/E {me + 1} MIX RATE -> "
                             f"{state['mix_rate']} frames"
+                        )
+
+                elif cmd_name == "CFMP" and len(body) >= 17:
+                    flags = body[0]
+                    if fairlight_master is not None and len(fairlight_master) >= 20:
+                        if flags & (1 << 0):
+                            fairlight_master[1] = body[1]
+                        if flags & (1 << 1):
+                            fairlight_master[4:8] = body[4:8]
+                        if flags & (1 << 2):
+                            fairlight_master[8:12] = body[8:12]
+                        if flags & (1 << 3):
+                            fairlight_master[12:16] = body[12:16]
+                        if flags & (1 << 4):
+                            fairlight_master[16] = body[16]
+
+                        response_payload = state_fairlight_master(fairlight_master)
+                        print(
+                            f"[{stamp()}] FAIRLIGHT MASTER -> "
+                            f"fader={struct.unpack('!i', fairlight_master[12:16])[0]} "
+                            f"followFTB={fairlight_master[16] > 0}"
+                        )
+
+                elif cmd_name == "CFSP" and len(body) >= 45:
+                    flags = struct.unpack("!H", body[0:2])[0]
+                    index = struct.unpack("!H", body[2:4])[0]
+                    source = struct.unpack("!q", body[8:16])[0]
+                    raw = fairlight_sources.get((index, source))
+                    if raw is not None and len(raw) >= 52:
+                        if flags & (1 << 0):
+                            raw[18] = body[16]
+                        if flags & (1 << 1):
+                            raw[20:24] = body[20:24]
+                        if flags & (1 << 2):
+                            raw[26:28] = body[24:26]
+                        if flags & (1 << 3):
+                            raw[29] = body[26]
+                        if flags & (1 << 4):
+                            raw[32:36] = body[28:32]
+                        if flags & (1 << 5):
+                            raw[36:40] = body[32:36]
+                        if flags & (1 << 6):
+                            raw[40:42] = body[36:38]
+                        if flags & (1 << 7):
+                            raw[44:48] = body[40:44]
+                        if flags & (1 << 8):
+                            raw[49] = body[44]
+
+                        response_payload = state_fairlight_source(raw)
+                        print(
+                            f"[{stamp()}] FAIRLIGHT INPUT {index} "
+                            f"SOURCE {source} -> "
+                            f"fader={struct.unpack('!i', raw[44:48])[0]} "
+                            f"mix={raw[49]}"
                         )
 
                 elif cmd_name == "CSBP" and len(body) >= 24:
