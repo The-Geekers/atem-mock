@@ -1,38 +1,138 @@
 # ATEM Mock
 
-Experimental ATEM switcher emulator for testing Blackmagic ATEM Software Control without physical hardware.
+Virtual Blackmagic ATEM control-plane emulator.
 
-## Initial target
+The goal is to let software such as ATEM Software Control, Companion and other
+ATEM clients behave as if a physical switcher were present on the network.
 
-Phase 0 focuses on proving that current ATEM Software Control can establish a network session with a software-emulated ATEM device.
+No video processing is performed. ATEM Mock emulates the network control plane
+and switcher state.
 
-Target test environment:
+## Current status
 
-- macOS Apple Silicon
-- ATEM Software Control 10.4.1
-- UDP control protocol on port 9910
+Working proof of concept:
 
-## Scope
+- ATEM UDP/9910 handshake
+- ATEM Software Control connection
+- full reference initialization stream
+- Program selection
+- Preview selection
+- CUT
+- AUTO (currently completed instantly)
+- state feedback to the ATEM client
+- multiple simultaneous ATEM control clients
+- shared virtual switcher state
+- model profile registry
 
-Planned device families:
+The currently validated reference profile is:
+
+- ATEM Television Studio HD
+
+## Quick start
+
+```bash
+python3 atem_mock.py
+```
+
+ATEM Software Control on the same machine can connect to:
+
+```
+127.0.0.1
+```
+
+From another machine, connect to the IP address of the computer running
+ATEM Mock.
+
+## Models
+
+List known model profiles:
+
+```bash
+python3 atem_mock.py --list-models
+```
+
+Launch a specific implemented profile:
+
+```bash
+python3 atem_mock.py --model tvstudio-hd
+```
+
+The registry already reserves profiles for:
 
 - ATEM Mini
-- ATEM Mini Pro / ISO
-- ATEM Mini Extreme / Extreme ISO
-- ATEM Constellation family
+- ATEM Mini Pro
+- ATEM Mini Pro ISO
+- ATEM Mini Extreme
+- ATEM Mini Extreme ISO
+- ATEM 1 M/E Constellation HD
+- ATEM 2 M/E Constellation HD
+- ATEM 4 M/E Constellation HD
 
-The project is designed around a common protocol engine with model-specific capability profiles.
+Profiles marked `PLANNED` are intentionally not selectable yet. We will only
+mark a model `READY` once its topology and initialization state are sufficiently
+accurate for ATEM clients.
 
-## Milestone 0
+## Multi-client operation
 
-1. Listen on UDP/9910.
-2. Parse the ATEM connection hello.
-3. Return a valid session handshake.
-4. Log all packets exchanged with ATEM Software Control.
-5. Determine the minimum initialization state required for Software Control to remain connected.
+ATEM Mock now treats controllers like multiple control surfaces connected to one
+physical switcher.
 
-No video processing is planned at this stage.
+For example:
 
-## Status
+```
+ATEM Software Control ─┐
+Companion ─────────────┼── UDP/9910 ── ATEM Mock
+Custom ATEM client ────┘
+```
 
-Early protocol research / proof of concept.
+A Program/Preview change made by one client is broadcast to the other connected
+clients.
+
+This is the foundation required for configuring Companion against a virtual
+ATEM without physical hardware.
+
+## Architecture direction
+
+```
+ATEM Mock
+├── protocol engine
+│   ├── UDP sessions
+│   ├── handshake / ACK
+│   ├── command parsing
+│   └── state broadcast
+├── switcher state
+│   ├── Program / Preview
+│   ├── transitions
+│   ├── keyers
+│   ├── Aux
+│   ├── SuperSource
+│   └── audio / Fairlight
+└── model profiles
+    ├── Mini family
+    ├── Mini Extreme family
+    └── Constellation family
+```
+
+## Roadmap
+
+Next milestones:
+
+1. validate simultaneous ATEM Software Control + Companion
+2. proper reliable packet queues / retransmission handling
+3. real AUTO transition progression
+4. DSK / USK / Aux control
+5. first accurate ATEM Mini Extreme profile
+6. Constellation profiles
+7. save/load virtual switcher configuration and state
+8. desktop launcher with model selector
+
+## Reference
+
+The initial working bootstrap stream is based on the public pyAtemSim work and
+a captured ATEM Television Studio HD initialization sequence.
+
+The original single-client working POC is preserved in:
+
+```
+reference/atem_mock_single_client.py
+```
