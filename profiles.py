@@ -29,7 +29,9 @@ PROFILES = {
     "mini-pro-iso": {
         "name": "ATEM Mini Pro ISO",
         "family": "mini",
-        "implemented": False,
+        "implemented": True,
+        "bootstrap": "profiles_data/mini-pro-iso-v8.4.data",
+        "notes": "Captured startup state from a real ATEM Mini Pro ISO.",
     },
     "mini-extreme": {
         "name": "ATEM Mini Extreme",
@@ -53,12 +55,28 @@ PROFILES = {
     "constellation-2me-hd": {
         "name": "ATEM 2 M/E Constellation HD",
         "family": "constellation",
-        "implemented": False,
+        "implemented": True,
+        "bootstrap": "profiles_data/constellation-2me-hd-v9.6.2.data",
+        "notes": "Captured startup state from a real ATEM 2 M/E Constellation HD.",
     },
     "constellation-4me-hd": {
         "name": "ATEM 4 M/E Constellation HD",
         "family": "constellation",
         "implemented": False,
+    },
+    "constellation-4me-4k": {
+        "name": "ATEM 4 M/E Constellation 4K",
+        "family": "constellation",
+        "implemented": True,
+        "bootstrap": "profiles_data/constellation-4me-4k-v9.1.data",
+        "notes": "Captured startup state from a real ATEM 4 M/E Constellation 4K.",
+    },
+    "tvs-hd8": {
+        "name": "ATEM Television Studio HD8",
+        "family": "television-studio",
+        "implemented": True,
+        "bootstrap": "profiles_data/tvs-hd8-v9.0.data",
+        "notes": "Captured startup state from a real ATEM Television Studio HD8.",
     },
 }
 
