@@ -225,6 +225,7 @@ def bootstrap_configuration(profile):
     """Extract editable configuration state from the captured startup stream."""
     inputs = {}
     multiviewers = {}
+    multiview_properties = {}
     aux_sources = {}
     video_mode = None
 
@@ -237,6 +238,12 @@ def bootstrap_configuration(profile):
                 mv_id = body[0]
                 window = body[1]
                 multiviewers.setdefault(mv_id, {})[window] = bytearray(body)
+            elif name == "MvPr" and len(body) >= 3:
+                mv_id = body[0]
+                multiview_properties[mv_id] = {
+                    "layout": body[1],
+                    "program_preview_swapped": body[2] > 0,
+                }
             elif name == "AuxS" and len(body) >= 4:
                 aux_sources[body[0]] = struct.unpack("!H", body[2:4])[0]
             elif name == "VidM" and len(body) >= 1:
@@ -245,6 +252,7 @@ def bootstrap_configuration(profile):
     return {
         "inputs": inputs,
         "multiviewers": multiviewers,
+        "multiview_properties": multiview_properties,
         "aux_sources": aux_sources,
         "video_mode": video_mode,
     }
@@ -256,6 +264,19 @@ def state_input_properties(raw_body):
 
 def state_multiview_source(raw_body):
     return command("MvIn", bytes(raw_body))
+
+
+def state_multiview_properties(mv_id, props):
+    return command(
+        "MvPr",
+        struct.pack(
+            "!BBBB",
+            mv_id,
+            props["layout"],
+            1 if props["program_preview_swapped"] else 0,
+            0,
+        ),
+    )
 
 
 def state_video_mode(mode):
@@ -390,6 +411,7 @@ def main():
     aux_sources = config_state["aux_sources"]
     input_properties = config_state["inputs"]
     multiviewers = config_state["multiviewers"]
+    multiview_properties = config_state["multiview_properties"]
     video_mode = config_state["video_mode"]
     auto_transitions = {}
 
@@ -730,6 +752,29 @@ def main():
                             f"[{stamp()}] MULTIVIEW {mv_id + 1} "
                             f"WINDOW {window + 1} -> input {source}"
                         )
+
+                elif cmd_name == "CMvP" and len(body) >= 4:
+                    flags = body[0]
+                    mv_id = body[1]
+                    props = multiview_properties.setdefault(
+                        mv_id,
+                        {
+                            "layout": 0,
+                            "program_preview_swapped": False,
+                        },
+                    )
+                    if flags & 0x01:
+                        props["layout"] = body[2]
+                    if flags & 0x02:
+                        props["program_preview_swapped"] = body[3] > 0
+
+                    response_payload = state_multiview_properties(mv_id, props)
+                    print(
+                        f"[{stamp()}] MULTIVIEW {mv_id + 1} LAYOUT -> "
+                        f"{props['layout']} / "
+                        f"PGM-PVW swapped="
+                        f"{props['program_preview_swapped']}"
+                    )
 
                 elif cmd_name == "CVdM" and len(body) >= 1:
                     video_mode = body[0]
