@@ -431,6 +431,13 @@ def bootstrap_configuration(profile):
     video_mode = None
     fairlight_master = None
     fairlight_sources = {}
+    fairlight_master_eq_bands = {}
+    fairlight_source_eq_bands = {}
+    fairlight_master_compressor = None
+    fairlight_master_limiter = None
+    fairlight_source_compressors = {}
+    fairlight_source_limiters = {}
+    fairlight_source_expanders = {}
 
     for payload in initial_state(profile):
         for name, body in parse_commands(payload):
@@ -491,6 +498,29 @@ def bootstrap_configuration(profile):
                 index = struct.unpack("!H", body[0:2])[0]
                 source = struct.unpack("!q", body[8:16])[0]
                 fairlight_sources[(index, source)] = bytearray(body)
+            elif name == "AMBP" and len(body) >= 18:
+                fairlight_master_eq_bands[body[0]] = bytearray(body)
+            elif name == "AEBP" and len(body) >= 34:
+                index = struct.unpack("!H", body[0:2])[0]
+                source = struct.unpack("!q", body[8:16])[0]
+                band = body[16]
+                fairlight_source_eq_bands[(index, source, band)] = bytearray(body)
+            elif name == "MOCP" and len(body) >= 24:
+                fairlight_master_compressor = bytearray(body)
+            elif name == "AMLP" and len(body) >= 20:
+                fairlight_master_limiter = bytearray(body)
+            elif name == "AICP" and len(body) >= 40:
+                index = struct.unpack("!H", body[0:2])[0]
+                source = struct.unpack("!q", body[8:16])[0]
+                fairlight_source_compressors[(index, source)] = bytearray(body)
+            elif name == "AILP" and len(body) >= 36:
+                index = struct.unpack("!H", body[0:2])[0]
+                source = struct.unpack("!q", body[8:16])[0]
+                fairlight_source_limiters[(index, source)] = bytearray(body)
+            elif name == "AIXP" and len(body) >= 40:
+                index = struct.unpack("!H", body[0:2])[0]
+                source = struct.unpack("!q", body[8:16])[0]
+                fairlight_source_expanders[(index, source)] = bytearray(body)
 
     return {
         "inputs": inputs,
@@ -503,6 +533,13 @@ def bootstrap_configuration(profile):
         "video_mode": video_mode,
         "fairlight_master": fairlight_master,
         "fairlight_sources": fairlight_sources,
+        "fairlight_master_eq_bands": fairlight_master_eq_bands,
+        "fairlight_source_eq_bands": fairlight_source_eq_bands,
+        "fairlight_master_compressor": fairlight_master_compressor,
+        "fairlight_master_limiter": fairlight_master_limiter,
+        "fairlight_source_compressors": fairlight_source_compressors,
+        "fairlight_source_limiters": fairlight_source_limiters,
+        "fairlight_source_expanders": fairlight_source_expanders,
     }
 
 
@@ -537,6 +574,10 @@ def state_fairlight_master(raw_body):
 
 def state_fairlight_source(raw_body):
     return command("FASP", bytes(raw_body))
+
+
+def state_fairlight_raw(name, raw_body):
+    return command(name, bytes(raw_body))
 
 
 def bootstrap_mix_effects(profile):
@@ -872,6 +913,13 @@ def main():
     video_mode = config_state["video_mode"]
     fairlight_master = config_state["fairlight_master"]
     fairlight_sources = config_state["fairlight_sources"]
+    fairlight_master_eq_bands = config_state["fairlight_master_eq_bands"]
+    fairlight_source_eq_bands = config_state["fairlight_source_eq_bands"]
+    fairlight_master_compressor = config_state["fairlight_master_compressor"]
+    fairlight_master_limiter = config_state["fairlight_master_limiter"]
+    fairlight_source_compressors = config_state["fairlight_source_compressors"]
+    fairlight_source_limiters = config_state["fairlight_source_limiters"]
+    fairlight_source_expanders = config_state["fairlight_source_expanders"]
     auto_transitions = {}
 
     print(
@@ -1713,6 +1761,118 @@ def main():
                             f"SOURCE {source} -> "
                             f"fader={struct.unpack('!i', raw[44:48])[0]} "
                             f"mix={raw[49]}"
+                        )
+
+                elif cmd_name == "CMBP" and len(body) >= 18:
+                    flags = body[0]
+                    band = body[1]
+                    raw = fairlight_master_eq_bands.get(band)
+                    if raw is not None and len(raw) >= 18:
+                        if flags & (1 << 0): raw[1] = body[2]
+                        if flags & (1 << 1): raw[3] = body[3]
+                        if flags & (1 << 2): raw[5] = body[4]
+                        if flags & (1 << 3): raw[8:12] = body[8:12]
+                        if flags & (1 << 4): raw[12:16] = body[12:16]
+                        if flags & (1 << 5): raw[16:18] = body[16:18]
+                        response_payload = state_fairlight_raw("AMBP", raw)
+                        print(
+                            f"[{stamp()}] FAIRLIGHT MASTER EQ BAND {band + 1} -> "
+                            f"on={raw[1] > 0} freq={struct.unpack('!I', raw[8:12])[0]} "
+                            f"gain={struct.unpack('!i', raw[12:16])[0]}"
+                        )
+
+                elif cmd_name == "CEBP" and len(body) >= 30:
+                    flags = body[0]
+                    index = struct.unpack("!H", body[2:4])[0]
+                    source = struct.unpack("!q", body[8:16])[0]
+                    band = body[16]
+                    raw = fairlight_source_eq_bands.get((index, source, band))
+                    if raw is not None and len(raw) >= 34:
+                        if flags & (1 << 0): raw[17] = body[17]
+                        if flags & (1 << 1): raw[19] = body[18]
+                        if flags & (1 << 2): raw[21] = body[19]
+                        if flags & (1 << 3): raw[24:28] = body[20:24]
+                        if flags & (1 << 4): raw[28:32] = body[24:28]
+                        if flags & (1 << 5): raw[32:34] = body[28:30]
+                        response_payload = state_fairlight_raw("AEBP", raw)
+                        print(
+                            f"[{stamp()}] FAIRLIGHT INPUT {index} EQ BAND {band + 1} -> "
+                            f"on={raw[17] > 0} freq={struct.unpack('!I', raw[24:28])[0]} "
+                            f"gain={struct.unpack('!i', raw[28:32])[0]}"
+                        )
+
+                elif cmd_name == "CMCP" and len(body) >= 24:
+                    flags = body[0]
+                    raw = fairlight_master_compressor
+                    if raw is not None and len(raw) >= 24:
+                        if flags & (1 << 0): raw[0] = body[1]
+                        if flags & (1 << 1): raw[4:8] = body[4:8]
+                        if flags & (1 << 2): raw[8:10] = body[8:10]
+                        if flags & (1 << 3): raw[12:16] = body[12:16]
+                        if flags & (1 << 4): raw[16:20] = body[16:20]
+                        if flags & (1 << 5): raw[20:24] = body[20:24]
+                        response_payload = state_fairlight_raw("MOCP", raw)
+                        print(f"[{stamp()}] FAIRLIGHT MASTER COMPRESSOR -> on={raw[0] > 0}")
+
+                elif cmd_name == "CMLP" and len(body) >= 20:
+                    flags = body[0]
+                    raw = fairlight_master_limiter
+                    if raw is not None and len(raw) >= 20:
+                        if flags & (1 << 0): raw[0] = body[1]
+                        if flags & (1 << 1): raw[4:8] = body[4:8]
+                        if flags & (1 << 2): raw[8:12] = body[8:12]
+                        if flags & (1 << 3): raw[12:16] = body[12:16]
+                        if flags & (1 << 4): raw[16:20] = body[16:20]
+                        response_payload = state_fairlight_raw("AMLP", raw)
+                        print(f"[{stamp()}] FAIRLIGHT MASTER LIMITER -> on={raw[0] > 0}")
+
+                elif cmd_name == "CICP" and len(body) >= 40:
+                    flags = body[0]
+                    index = struct.unpack("!H", body[2:4])[0]
+                    source = struct.unpack("!q", body[8:16])[0]
+                    raw = fairlight_source_compressors.get((index, source))
+                    if raw is not None and len(raw) >= 40:
+                        if flags & (1 << 0): raw[16] = body[16]
+                        if flags & (1 << 1): raw[20:24] = body[20:24]
+                        if flags & (1 << 2): raw[24:26] = body[24:26]
+                        if flags & (1 << 3): raw[28:32] = body[28:32]
+                        if flags & (1 << 4): raw[32:36] = body[32:36]
+                        if flags & (1 << 5): raw[36:40] = body[36:40]
+                        response_payload = state_fairlight_raw("AICP", raw)
+                        print(f"[{stamp()}] FAIRLIGHT INPUT {index} COMPRESSOR -> on={raw[16] > 0}")
+
+                elif cmd_name == "CILP" and len(body) >= 36:
+                    flags = body[0]
+                    index = struct.unpack("!H", body[2:4])[0]
+                    source = struct.unpack("!q", body[8:16])[0]
+                    raw = fairlight_source_limiters.get((index, source))
+                    if raw is not None and len(raw) >= 36:
+                        if flags & (1 << 0): raw[16] = body[16]
+                        if flags & (1 << 1): raw[20:24] = body[20:24]
+                        if flags & (1 << 2): raw[24:28] = body[24:28]
+                        if flags & (1 << 3): raw[28:32] = body[28:32]
+                        if flags & (1 << 4): raw[32:36] = body[32:36]
+                        response_payload = state_fairlight_raw("AILP", raw)
+                        print(f"[{stamp()}] FAIRLIGHT INPUT {index} LIMITER -> on={raw[16] > 0}")
+
+                elif cmd_name == "CIXP" and len(body) >= 40:
+                    flags = body[0]
+                    index = struct.unpack("!H", body[2:4])[0]
+                    source = struct.unpack("!q", body[8:16])[0]
+                    raw = fairlight_source_expanders.get((index, source))
+                    if raw is not None and len(raw) >= 40:
+                        if flags & (1 << 0): raw[16] = body[16]
+                        if flags & (1 << 1): raw[17] = body[17]
+                        if flags & (1 << 2): raw[20:24] = body[20:24]
+                        if flags & (1 << 3): raw[24:26] = body[24:26]
+                        if flags & (1 << 4): raw[26:28] = body[26:28]
+                        if flags & (1 << 5): raw[28:32] = body[28:32]
+                        if flags & (1 << 6): raw[32:36] = body[32:36]
+                        if flags & (1 << 7): raw[36:40] = body[36:40]
+                        response_payload = state_fairlight_raw("AIXP", raw)
+                        print(
+                            f"[{stamp()}] FAIRLIGHT INPUT {index} EXPANDER -> "
+                            f"on={raw[16] > 0} gate={raw[17] > 0}"
                         )
 
                 elif cmd_name == "CSBP" and len(body) >= 24:
