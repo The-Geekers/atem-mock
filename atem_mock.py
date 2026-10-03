@@ -118,6 +118,13 @@ def state_dsk(dsk_id: int, on_air: bool):
     )
 
 
+def state_dsk_sources(dsk_id: int, fill_source: int, cut_source: int):
+    return command(
+        "DskB",
+        struct.pack("!BBHH2x", dsk_id, 0, fill_source, cut_source),
+    )
+
+
 def state_aux(aux_bus: int, source: int):
     return command("AuxS", struct.pack("!BBH", aux_bus, 0, source))
 
@@ -224,6 +231,7 @@ def initial_state(profile=None):
 def bootstrap_configuration(profile):
     """Extract editable configuration state from the captured startup stream."""
     inputs = {}
+    downstream_key_sources = {}
     multiviewers = {}
     multiview_properties = {}
     aux_sources = {}
@@ -234,6 +242,12 @@ def bootstrap_configuration(profile):
             if name == "InPr" and len(body) >= 36:
                 input_id = struct.unpack("!H", body[0:2])[0]
                 inputs[input_id] = bytearray(body)
+            elif name == "DskB" and len(body) >= 6:
+                dsk_id = body[0]
+                downstream_key_sources[dsk_id] = {
+                    "fill": struct.unpack("!H", body[2:4])[0],
+                    "cut": struct.unpack("!H", body[4:6])[0],
+                }
             elif name == "MvIn" and len(body) >= 6:
                 mv_id = body[0]
                 window = body[1]
@@ -251,6 +265,7 @@ def bootstrap_configuration(profile):
 
     return {
         "inputs": inputs,
+        "downstream_key_sources": downstream_key_sources,
         "multiviewers": multiviewers,
         "multiview_properties": multiview_properties,
         "aux_sources": aux_sources,
@@ -408,6 +423,7 @@ def main():
     mix_effects = bootstrap_mix_effects(profile)
     config_state = bootstrap_configuration(profile)
     downstream_keyers = [False, False]
+    downstream_key_sources = config_state["downstream_key_sources"]
     aux_sources = config_state["aux_sources"]
     input_properties = config_state["inputs"]
     multiviewers = config_state["multiviewers"]
@@ -678,6 +694,42 @@ def main():
                             f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} -> "
                             f"{'ON AIR' if on_air else 'OFF'}"
                         )
+
+                elif cmd_name == "CDsF" and len(body) >= 4:
+                    dsk_id = body[0]
+                    fill_source = struct.unpack("!H", body[2:4])[0]
+                    sources = downstream_key_sources.setdefault(
+                        dsk_id,
+                        {"fill": 0, "cut": 0},
+                    )
+                    sources["fill"] = fill_source
+                    response_payload = state_dsk_sources(
+                        dsk_id,
+                        sources["fill"],
+                        sources["cut"],
+                    )
+                    print(
+                        f"[{stamp()}] DSK {dsk_id + 1} FILL -> input "
+                        f"{fill_source}"
+                    )
+
+                elif cmd_name == "CDsC" and len(body) >= 4:
+                    dsk_id = body[0]
+                    cut_source = struct.unpack("!H", body[2:4])[0]
+                    sources = downstream_key_sources.setdefault(
+                        dsk_id,
+                        {"fill": 0, "cut": 0},
+                    )
+                    sources["cut"] = cut_source
+                    response_payload = state_dsk_sources(
+                        dsk_id,
+                        sources["fill"],
+                        sources["cut"],
+                    )
+                    print(
+                        f"[{stamp()}] DSK {dsk_id + 1} CUT SOURCE -> input "
+                        f"{cut_source}"
+                    )
 
                 elif cmd_name == "CDsL" and len(body) >= 2:
                     dsk_id = body[0]
