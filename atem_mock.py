@@ -200,6 +200,30 @@ def state_supersource_properties(props):
     )
 
 
+def state_supersource_border(ssrc_id, border):
+    return command(
+        "SSBd",
+        struct.pack(
+            "!BBBBHHBBBBHHHHB3x",
+            ssrc_id,
+            1 if border["enabled"] else 0,
+            border["bevel"],
+            0,
+            border["outer_width"],
+            border["inner_width"],
+            border["outer_softness"],
+            border["inner_softness"],
+            border["bevel_softness"],
+            border["bevel_position"],
+            border["hue"],
+            border["saturation"],
+            border["luma"],
+            border["light_direction"],
+            border["light_altitude"],
+        ),
+    )
+
+
 def initial_state(profile=None):
     """Return a known working ATEM initialization stream."""
     if profile and profile.get("bootstrap", "").endswith(".data"):
@@ -232,6 +256,8 @@ def bootstrap_configuration(profile):
     """Extract editable configuration state from the captured startup stream."""
     inputs = {}
     downstream_key_sources = {}
+    supersource_properties = {}
+    supersource_borders = {}
     multiviewers = {}
     multiview_properties = {}
     aux_sources = {}
@@ -247,6 +273,34 @@ def bootstrap_configuration(profile):
                 downstream_key_sources[dsk_id] = {
                     "fill": struct.unpack("!H", body[2:4])[0],
                     "cut": struct.unpack("!H", body[4:6])[0],
+                }
+            elif name == "SSrc" and len(body) >= 13:
+                ssrc_id = body[0]
+                supersource_properties[ssrc_id] = {
+                    "art_fill_source": struct.unpack("!H", body[2:4])[0],
+                    "art_cut_source": struct.unpack("!H", body[4:6])[0],
+                    "art_option": body[6],
+                    "art_pre_multiplied": body[7] == 1,
+                    "art_clip": struct.unpack("!H", body[8:10])[0],
+                    "art_gain": struct.unpack("!H", body[10:12])[0],
+                    "art_invert_key": body[12] == 1,
+                }
+            elif name == "SSBd" and len(body) >= 21:
+                ssrc_id = body[0]
+                supersource_borders[ssrc_id] = {
+                    "enabled": body[1] == 1,
+                    "bevel": body[2],
+                    "outer_width": struct.unpack("!H", body[4:6])[0],
+                    "inner_width": struct.unpack("!H", body[6:8])[0],
+                    "outer_softness": body[8],
+                    "inner_softness": body[9],
+                    "bevel_softness": body[10],
+                    "bevel_position": body[11],
+                    "hue": struct.unpack("!H", body[12:14])[0],
+                    "saturation": struct.unpack("!H", body[14:16])[0],
+                    "luma": struct.unpack("!H", body[16:18])[0],
+                    "light_direction": struct.unpack("!H", body[18:20])[0],
+                    "light_altitude": body[20],
                 }
             elif name == "MvIn" and len(body) >= 6:
                 mv_id = body[0]
@@ -266,6 +320,8 @@ def bootstrap_configuration(profile):
     return {
         "inputs": inputs,
         "downstream_key_sources": downstream_key_sources,
+        "supersource_properties": supersource_properties,
+        "supersource_borders": supersource_borders,
         "multiviewers": multiviewers,
         "multiview_properties": multiview_properties,
         "aux_sources": aux_sources,
@@ -454,15 +510,38 @@ def main():
         }
         for _ in range(4)
     ]
-    supersource_properties = {
-        "art_fill_source": 0,
-        "art_cut_source": 0,
-        "art_option": 0,
-        "art_pre_multiplied": False,
-        "art_clip": 0,
-        "art_gain": 0,
-        "art_invert_key": False,
-    }
+    supersource_properties_by_id = config_state["supersource_properties"]
+    supersource_borders = config_state["supersource_borders"]
+    supersource_properties = supersource_properties_by_id.setdefault(
+        0,
+        {
+            "art_fill_source": 0,
+            "art_cut_source": 0,
+            "art_option": 0,
+            "art_pre_multiplied": False,
+            "art_clip": 0,
+            "art_gain": 0,
+            "art_invert_key": False,
+        },
+    )
+    supersource_borders.setdefault(
+        0,
+        {
+            "enabled": False,
+            "bevel": 0,
+            "outer_width": 0,
+            "inner_width": 0,
+            "outer_softness": 0,
+            "inner_softness": 0,
+            "bevel_softness": 0,
+            "bevel_position": 0,
+            "hue": 0,
+            "saturation": 0,
+            "luma": 0,
+            "light_direction": 0,
+            "light_altitude": 0,
+        },
+    )
 
     while True:
         # Drive independent AUTO transitions for every M/E.
@@ -935,34 +1014,101 @@ def main():
                 elif cmd_name == "CSSc" and len(body) >= 13:
                     flags = body[0]
                     ssrc_id = body[1]
-                    if ssrc_id == 0:
-                        if flags & (1 << 0):
-                            supersource_properties["art_fill_source"] = struct.unpack(
-                                "!H", body[2:4]
-                            )[0]
-                        if flags & (1 << 1):
-                            supersource_properties["art_cut_source"] = struct.unpack(
-                                "!H", body[4:6]
-                            )[0]
-                        if flags & (1 << 2):
-                            supersource_properties["art_option"] = body[6]
-                        if flags & (1 << 3):
-                            supersource_properties["art_pre_multiplied"] = body[7] == 1
-                        if flags & (1 << 4):
-                            supersource_properties["art_clip"] = struct.unpack(
-                                "!H", body[8:10]
-                            )[0]
-                        if flags & (1 << 5):
-                            supersource_properties["art_gain"] = struct.unpack(
-                                "!H", body[10:12]
-                            )[0]
-                        if flags & (1 << 6):
-                            supersource_properties["art_invert_key"] = body[12] == 1
+                    props = supersource_properties_by_id.setdefault(
+                        ssrc_id,
+                        {
+                            "art_fill_source": 0,
+                            "art_cut_source": 0,
+                            "art_option": 0,
+                            "art_pre_multiplied": False,
+                            "art_clip": 0,
+                            "art_gain": 0,
+                            "art_invert_key": False,
+                        },
+                    )
 
-                        response_payload = state_supersource_properties(
-                            supersource_properties
-                        )
-                        print(f"[{stamp()}] SUPERSOURCE properties updated")
+                    if flags & (1 << 0):
+                        props["art_fill_source"] = struct.unpack("!H", body[2:4])[0]
+                    if flags & (1 << 1):
+                        props["art_cut_source"] = struct.unpack("!H", body[4:6])[0]
+                    if flags & (1 << 2):
+                        props["art_option"] = body[6]
+                    if flags & (1 << 3):
+                        props["art_pre_multiplied"] = body[7] == 1
+                    if flags & (1 << 4):
+                        props["art_clip"] = struct.unpack("!H", body[8:10])[0]
+                    if flags & (1 << 5):
+                        props["art_gain"] = struct.unpack("!H", body[10:12])[0]
+                    if flags & (1 << 6):
+                        props["art_invert_key"] = body[12] == 1
+
+                    if ssrc_id == 0:
+                        supersource_properties = props
+                    response_payload = state_supersource_properties(props)
+                    print(
+                        f"[{stamp()}] SUPERSOURCE {ssrc_id + 1} ART -> "
+                        f"fill {props['art_fill_source']}, "
+                        f"cut {props['art_cut_source']}, "
+                        f"pre={props['art_pre_multiplied']}, "
+                        f"clip={props['art_clip']}, gain={props['art_gain']}, "
+                        f"invert={props['art_invert_key']}"
+                    )
+
+                elif cmd_name == "CSBd" and len(body) >= 23:
+                    flags = struct.unpack("!H", body[0:2])[0]
+                    ssrc_id = body[2]
+                    border = supersource_borders.setdefault(
+                        ssrc_id,
+                        {
+                            "enabled": False,
+                            "bevel": 0,
+                            "outer_width": 0,
+                            "inner_width": 0,
+                            "outer_softness": 0,
+                            "inner_softness": 0,
+                            "bevel_softness": 0,
+                            "bevel_position": 0,
+                            "hue": 0,
+                            "saturation": 0,
+                            "luma": 0,
+                            "light_direction": 0,
+                            "light_altitude": 0,
+                        },
+                    )
+                    if flags & (1 << 0):
+                        border["enabled"] = body[3] == 1
+                    if flags & (1 << 1):
+                        border["bevel"] = body[4]
+                    if flags & (1 << 2):
+                        border["outer_width"] = struct.unpack("!H", body[6:8])[0]
+                    if flags & (1 << 3):
+                        border["inner_width"] = struct.unpack("!H", body[8:10])[0]
+                    if flags & (1 << 4):
+                        border["outer_softness"] = body[10]
+                    if flags & (1 << 5):
+                        border["inner_softness"] = body[11]
+                    if flags & (1 << 6):
+                        border["bevel_softness"] = body[12]
+                    if flags & (1 << 7):
+                        border["bevel_position"] = body[13]
+                    if flags & (1 << 8):
+                        border["hue"] = struct.unpack("!H", body[14:16])[0]
+                    if flags & (1 << 9):
+                        border["saturation"] = struct.unpack("!H", body[16:18])[0]
+                    if flags & (1 << 10):
+                        border["luma"] = struct.unpack("!H", body[18:20])[0]
+                    if flags & (1 << 11):
+                        border["light_direction"] = struct.unpack("!H", body[20:22])[0]
+                    if flags & (1 << 12):
+                        border["light_altitude"] = body[22]
+
+                    response_payload = state_supersource_border(ssrc_id, border)
+                    print(
+                        f"[{stamp()}] SUPERSOURCE {ssrc_id + 1} BORDER -> "
+                        f"enabled={border['enabled']}, bevel={border['bevel']}, "
+                        f"hue={border['hue']}, sat={border['saturation']}, "
+                        f"luma={border['luma']}"
+                    )
 
                 if response_payload:
                     broadcast_state(sock, clients, response_payload)
