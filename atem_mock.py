@@ -221,6 +221,44 @@ def initial_state(profile=None):
     state.append(command("InCm", b"\x01\x00\x00\x00", reserved=0x0000))
     return state
 
+def bootstrap_mix_effects(profile):
+    """Derive M/E topology and initial bus state from the startup stream."""
+    result = {}
+    for payload in initial_state(profile):
+        for name, body in parse_commands(payload):
+            if name == "_MeC" and len(body) >= 2:
+                me = body[0]
+                result.setdefault(me, {})["key_count"] = body[1]
+            elif name == "PrgI" and len(body) >= 4:
+                me, source = struct.unpack("!BxH", body[:4])
+                result.setdefault(me, {})["program"] = source
+            elif name == "PrvI" and len(body) >= 4:
+                me, source = struct.unpack("!BxH", body[:4])
+                result.setdefault(me, {})["preview"] = source
+            elif name == "TMxP" and len(body) >= 2:
+                me = body[0]
+                result.setdefault(me, {})["mix_rate"] = body[1]
+            elif name == "TrSS" and len(body) >= 5:
+                me = body[0]
+                result.setdefault(me, {})["transition_style"] = body[3]
+                result.setdefault(me, {})["transition_selection"] = body[4]
+
+    if not result:
+        result[0] = {}
+
+    for state in result.values():
+        state.setdefault("key_count", 1)
+        state.setdefault("program", 1)
+        state.setdefault("preview", 2)
+        state.setdefault("mix_rate", 25)
+        state.setdefault("transition_style", 0)
+        state.setdefault("transition_selection", 1)
+        state["transition_position"] = 0
+        state["upstream_keyers"] = [False] * state["key_count"]
+
+    return dict(sorted(result.items()))
+
+
 class ClientSession:
     def __init__(self, addr, client_id):
         self.addr = addr
