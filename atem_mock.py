@@ -101,6 +101,63 @@ def state_usk_on_air(keyer_id: int, on_air: bool, me: int = 0):
     )
 
 
+def state_usk_base(me, keyer_id, key):
+    return command(
+        "KeBP",
+        struct.pack(
+            "!BBBBBBHHBBhhhh",
+            me,
+            keyer_id,
+            key["type"],
+            0,
+            1 if key["can_fly"] else 0,
+            1 if key["fly_enabled"] else 0,
+            key["fill_source"],
+            key["cut_source"],
+            1 if key["mask_enabled"] else 0,
+            0,
+            key["mask_top"],
+            key["mask_bottom"],
+            key["mask_left"],
+            key["mask_right"],
+        ),
+    )
+
+
+def state_usk_luma(me, keyer_id, key):
+    luma = key["luma"]
+    return command(
+        "KeLm",
+        struct.pack(
+            "!BBBBHHB3x",
+            me,
+            keyer_id,
+            1 if luma["pre_multiplied"] else 0,
+            0,
+            luma["clip"],
+            luma["gain"],
+            1 if luma["invert"] else 0,
+        ),
+    )
+
+
+def state_usk_chroma(me, keyer_id, key):
+    chroma = key["chroma"]
+    return command(
+        "KeCk",
+        struct.pack(
+            "!BBHHHHB1x",
+            me,
+            keyer_id,
+            chroma["hue"],
+            chroma["gain"],
+            chroma["y_suppress"],
+            chroma["lift"],
+            1 if chroma["narrow"] else 0,
+        ),
+    )
+
+
 def state_dsk(dsk_id: int, on_air: bool):
     # Protocol >= 8.0.1 DskS layout:
     # id, onAir, inTransition, isAuto, isTowardsOnAir, remainingFrames.
@@ -375,6 +432,58 @@ def bootstrap_mix_effects(profile):
                 me = body[0]
                 result.setdefault(me, {})["transition_style"] = body[3]
                 result.setdefault(me, {})["transition_selection"] = body[4]
+            elif name == "KeBP" and len(body) >= 20:
+                me = body[0]
+                keyer_id = body[1]
+                keys = result.setdefault(me, {}).setdefault("key_states", {})
+                keys[keyer_id] = {
+                    "type": body[2],
+                    "can_fly": body[4] == 1,
+                    "fly_enabled": body[5] == 1,
+                    "fill_source": struct.unpack("!H", body[6:8])[0],
+                    "cut_source": struct.unpack("!H", body[8:10])[0],
+                    "mask_enabled": body[10] == 1,
+                    "mask_top": struct.unpack("!h", body[12:14])[0],
+                    "mask_bottom": struct.unpack("!h", body[14:16])[0],
+                    "mask_left": struct.unpack("!h", body[16:18])[0],
+                    "mask_right": struct.unpack("!h", body[18:20])[0],
+                    "luma": {
+                        "pre_multiplied": False,
+                        "clip": 0,
+                        "gain": 0,
+                        "invert": False,
+                    },
+                    "chroma": {
+                        "hue": 0,
+                        "gain": 0,
+                        "y_suppress": 0,
+                        "lift": 0,
+                        "narrow": False,
+                    },
+                }
+            elif name == "KeLm" and len(body) >= 9:
+                me = body[0]
+                keyer_id = body[1]
+                keys = result.setdefault(me, {}).setdefault("key_states", {})
+                key = keys.setdefault(keyer_id, {})
+                key["luma"] = {
+                    "pre_multiplied": body[2] == 1,
+                    "clip": struct.unpack("!H", body[4:6])[0],
+                    "gain": struct.unpack("!H", body[6:8])[0],
+                    "invert": body[8] == 1,
+                }
+            elif name == "KeCk" and len(body) >= 11:
+                me = body[0]
+                keyer_id = body[1]
+                keys = result.setdefault(me, {}).setdefault("key_states", {})
+                key = keys.setdefault(keyer_id, {})
+                key["chroma"] = {
+                    "hue": struct.unpack("!H", body[2:4])[0],
+                    "gain": struct.unpack("!H", body[4:6])[0],
+                    "y_suppress": struct.unpack("!H", body[6:8])[0],
+                    "lift": struct.unpack("!H", body[8:10])[0],
+                    "narrow": body[10] == 1,
+                }
 
     if not result:
         result[0] = {}
@@ -388,6 +497,38 @@ def bootstrap_mix_effects(profile):
         state.setdefault("transition_selection", 1)
         state["transition_position"] = 0
         state["upstream_keyers"] = [False] * state["key_count"]
+        key_states = state.setdefault("key_states", {})
+        for keyer_id in range(state["key_count"]):
+            key = key_states.setdefault(keyer_id, {})
+            key.setdefault("type", 0)
+            key.setdefault("can_fly", True)
+            key.setdefault("fly_enabled", False)
+            key.setdefault("fill_source", 1)
+            key.setdefault("cut_source", 0)
+            key.setdefault("mask_enabled", False)
+            key.setdefault("mask_top", 0)
+            key.setdefault("mask_bottom", 0)
+            key.setdefault("mask_left", 0)
+            key.setdefault("mask_right", 0)
+            key.setdefault(
+                "luma",
+                {
+                    "pre_multiplied": False,
+                    "clip": 0,
+                    "gain": 0,
+                    "invert": False,
+                },
+            )
+            key.setdefault(
+                "chroma",
+                {
+                    "hue": 0,
+                    "gain": 0,
+                    "y_suppress": 0,
+                    "lift": 0,
+                    "narrow": False,
+                },
+            )
 
     return dict(sorted(result.items()))
 
@@ -757,6 +898,135 @@ def main():
                         print(
                             f"[{stamp()}] M/E {me + 1} AUTO START -> "
                             f"{frames} frames / {duration:.3f}s"
+                        )
+
+                elif cmd_name == "CKTp" and len(body) >= 5:
+                    flags = body[0]
+                    me = body[1]
+                    keyer_id = body[2]
+                    if (
+                        me in mix_effects
+                        and keyer_id in mix_effects[me]["key_states"]
+                    ):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        if flags & 0x01:
+                            key["type"] = body[3]
+                        if flags & 0x02:
+                            key["fly_enabled"] = body[4] == 1
+                        response_payload = state_usk_base(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} "
+                            f"TYPE -> {key['type']} / fly={key['fly_enabled']}"
+                        )
+
+                elif cmd_name == "CKeF" and len(body) >= 4:
+                    me = body[0]
+                    keyer_id = body[1]
+                    if (
+                        me in mix_effects
+                        and keyer_id in mix_effects[me]["key_states"]
+                    ):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        key["fill_source"] = struct.unpack("!H", body[2:4])[0]
+                        response_payload = state_usk_base(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} "
+                            f"FILL -> input {key['fill_source']}"
+                        )
+
+                elif cmd_name == "CKeC" and len(body) >= 4:
+                    me = body[0]
+                    keyer_id = body[1]
+                    if (
+                        me in mix_effects
+                        and keyer_id in mix_effects[me]["key_states"]
+                    ):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        key["cut_source"] = struct.unpack("!H", body[2:4])[0]
+                        response_payload = state_usk_base(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} "
+                            f"CUT SOURCE -> input {key['cut_source']}"
+                        )
+
+                elif cmd_name == "CKMs" and len(body) >= 12:
+                    flags = body[0]
+                    me = body[1]
+                    keyer_id = body[2]
+                    if (
+                        me in mix_effects
+                        and keyer_id in mix_effects[me]["key_states"]
+                    ):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        if flags & (1 << 0):
+                            key["mask_enabled"] = body[3] == 1
+                        if flags & (1 << 1):
+                            key["mask_top"] = struct.unpack("!h", body[4:6])[0]
+                        if flags & (1 << 2):
+                            key["mask_bottom"] = struct.unpack("!h", body[6:8])[0]
+                        if flags & (1 << 3):
+                            key["mask_left"] = struct.unpack("!h", body[8:10])[0]
+                        if flags & (1 << 4):
+                            key["mask_right"] = struct.unpack("!h", body[10:12])[0]
+                        response_payload = state_usk_base(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} MASK -> "
+                            f"enabled={key['mask_enabled']} "
+                            f"T{key['mask_top']} B{key['mask_bottom']} "
+                            f"L{key['mask_left']} R{key['mask_right']}"
+                        )
+
+                elif cmd_name == "CKLm" and len(body) >= 9:
+                    flags = body[0]
+                    me = body[1]
+                    keyer_id = body[2]
+                    if (
+                        me in mix_effects
+                        and keyer_id in mix_effects[me]["key_states"]
+                    ):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        luma = key["luma"]
+                        if flags & (1 << 0):
+                            luma["pre_multiplied"] = body[3] == 1
+                        if flags & (1 << 1):
+                            luma["clip"] = struct.unpack("!H", body[4:6])[0]
+                        if flags & (1 << 2):
+                            luma["gain"] = struct.unpack("!H", body[6:8])[0]
+                        if flags & (1 << 3):
+                            luma["invert"] = body[8] == 1
+                        response_payload = state_usk_luma(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} LUMA -> "
+                            f"pre={luma['pre_multiplied']} clip={luma['clip']} "
+                            f"gain={luma['gain']} invert={luma['invert']}"
+                        )
+
+                elif cmd_name == "CKCk" and len(body) >= 13:
+                    flags = body[0]
+                    me = body[1]
+                    keyer_id = body[2]
+                    if (
+                        me in mix_effects
+                        and keyer_id in mix_effects[me]["key_states"]
+                    ):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        chroma = key["chroma"]
+                        if flags & (1 << 0):
+                            chroma["hue"] = struct.unpack("!H", body[4:6])[0]
+                        if flags & (1 << 1):
+                            chroma["gain"] = struct.unpack("!H", body[6:8])[0]
+                        if flags & (1 << 2):
+                            chroma["y_suppress"] = struct.unpack("!H", body[8:10])[0]
+                        if flags & (1 << 3):
+                            chroma["lift"] = struct.unpack("!H", body[10:12])[0]
+                        if flags & (1 << 4):
+                            chroma["narrow"] = body[12] == 1
+                        response_payload = state_usk_chroma(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} CHROMA -> "
+                            f"hue={chroma['hue']} gain={chroma['gain']} "
+                            f"ysup={chroma['y_suppress']} lift={chroma['lift']} "
+                            f"narrow={chroma['narrow']}"
                         )
 
                 elif cmd_name == "CKOn" and len(body) >= 3:
