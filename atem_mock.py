@@ -160,20 +160,20 @@ def state_usk_chroma(me, keyer_id, key):
 
 def state_usk_pattern(me, keyer_id, key):
     p = key["pattern"]
+    # KePt response body is exactly 16 bytes:
+    # me, keyer, style, pad, size, symmetry, softness, posX, posY, invert, pad.
     return command(
         "KePt",
         struct.pack(
-            "!BBBBHHHHHHB1x",
+            "!BBBxHHHHHBx",
             me,
             keyer_id,
             p["style"],
-            0,
             p["size"],
             p["symmetry"],
             p["softness"],
             p["position_x"],
             p["position_y"],
-            0,
             1 if p["invert"] else 0,
         ),
     )
@@ -234,14 +234,14 @@ def state_usk_fly_properties(me, keyer_id, fly):
 
 
 def state_usk_keyframe(me, keyer_id, keyframe_id, kf):
+    # KKFP update body is exactly 52 bytes. Byte 43 is reserved.
     return command(
         "KKFP",
         struct.pack(
-            "!BBBBIIiiiHHBBBBB1xHHHHB1xhhhh4x",
+            "!BBBxIIiiiHHBBBBBxHHHHBxhhhh",
             me,
             keyer_id,
             keyframe_id,
-            0,
             kf["size_x"],
             kf["size_y"],
             kf["position_x"],
