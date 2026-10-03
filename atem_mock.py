@@ -63,6 +63,34 @@ def fixed_string(value: str, size: int):
     return raw + (b"\x00" * (size - len(raw)))
 
 
+def parse_commands(payload: bytes):
+    """Parse one ATEM command packet payload into (name, body) tuples."""
+    commands = []
+    offset = 0
+    total = len(payload)
+
+    while offset + 8 <= total:
+        length = struct.unpack_from("!H", payload, offset)[0]
+        if length < 8 or offset + length > total:
+            break
+
+        name = payload[offset + 4:offset + 8].decode("ascii", errors="replace")
+        body = payload[offset + 8:offset + length]
+        commands.append((name, body))
+        offset += length
+
+    return commands
+
+
+def state_program(program_source: int):
+    return command("PrgI", struct.pack("!BxH", 0, program_source))
+
+
+def state_preview(preview_source: int):
+    # The reference Television Studio HD state uses an extra 4 bytes here.
+    return command("PrvI", struct.pack("!BxH4x", 0, preview_source))
+
+
 def initial_state():
     """Return a known working ATEM initialization stream.
 
@@ -115,6 +143,10 @@ def main():
     next_packet_id = 1
     seen_rx = set()
 
+    # Initial values from the reference Television Studio HD dump.
+    program_source = 5
+    preview_source = 1
+
     while True:
         data, addr = sock.recvfrom(65535)
         p = parse_packet(data)
@@ -161,6 +193,63 @@ def main():
             sock.sendto(ack, peer)
             if first_time and p["packet_id"]:
                 print(f"[{stamp()}] ACK client packet #{p['packet_id']}")
+
+        # Process commands sent by ATEM Software Control.
+        if p["payload"]:
+            for cmd_name, body in parse_commands(p["payload"]):
+                response_payload = None
+
+                if cmd_name == "CPgI" and len(body) >= 4:
+                    me, source = struct.unpack("!BxH", body[:4])
+                    if me == 0:
+                        program_source = source
+                        response_payload = state_program(program_source)
+                        print(f"[{stamp()}] PROGRAM -> input {program_source}")
+
+                elif cmd_name == "CPvI" and len(body) >= 4:
+                    me, source = struct.unpack("!BxH", body[:4])
+                    if me == 0:
+                        preview_source = source
+                        response_payload = state_preview(preview_source)
+                        print(f"[{stamp()}] PREVIEW -> input {preview_source}")
+
+                elif cmd_name == "DCut" and len(body) >= 1:
+                    me = body[0]
+                    if me == 0:
+                        program_source, preview_source = preview_source, program_source
+                        response_payload = (
+                            state_program(program_source)
+                            + state_preview(preview_source)
+                        )
+                        print(
+                            f"[{stamp()}] CUT -> "
+                            f"PGM {program_source} / PVW {preview_source}"
+                        )
+
+                elif cmd_name == "DAut" and len(body) >= 1:
+                    me = body[0]
+                    if me == 0:
+                        # First milestone: complete AUTO immediately.
+                        # Transition animation/state will be implemented next.
+                        program_source, preview_source = preview_source, program_source
+                        response_payload = (
+                            state_program(program_source)
+                            + state_preview(preview_source)
+                        )
+                        print(
+                            f"[{stamp()}] AUTO -> "
+                            f"PGM {program_source} / PVW {preview_source}"
+                        )
+
+                if response_payload:
+                    pkt = make_packet(
+                        FLAG_COMMAND,
+                        session,
+                        packet_id=next_packet_id,
+                        payload=response_payload,
+                    )
+                    sock.sendto(pkt, peer)
+                    next_packet_id += 1
 
         # As soon as the transport session exists, push the minimal switcher
         # state. Each state packet is reliable and therefore gets a packet id.
