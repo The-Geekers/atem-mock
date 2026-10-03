@@ -15,12 +15,16 @@ PROFILES = {
     "mini": {
         "name": "ATEM Mini",
         "family": "mini",
-        "implemented": False,
+        "implemented": True,
+        "bootstrap": "profiles_data/mini-v8.6.data",
+        "notes": "Captured startup state from a real ATEM Mini.",
     },
     "mini-pro": {
         "name": "ATEM Mini Pro",
         "family": "mini",
-        "implemented": False,
+        "implemented": True,
+        "bootstrap": "profiles_data/mini-pro-v8.2.data",
+        "notes": "Captured startup state from a real ATEM Mini Pro.",
     },
     "mini-pro-iso": {
         "name": "ATEM Mini Pro ISO",
@@ -37,7 +41,9 @@ PROFILES = {
     "mini-extreme-iso": {
         "name": "ATEM Mini Extreme ISO",
         "family": "mini",
-        "implemented": False,
+        "implemented": True,
+        "bootstrap": "profiles_data/mini-extreme-iso-v9.5.data",
+        "notes": "Captured startup state from a real ATEM Mini Extreme ISO.",
     },
     "constellation-1me-hd": {
         "name": "ATEM 1 M/E Constellation HD",
