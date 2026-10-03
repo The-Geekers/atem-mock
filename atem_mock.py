@@ -533,61 +533,67 @@ def main():
 
                 if cmd_name == "CPgI" and len(body) >= 4:
                     me, source = struct.unpack("!BxH", body[:4])
-                    if me == 0:
-                        program_source = source
-                        response_payload = state_program(program_source)
+                    if me in mix_effects:
+                        state = mix_effects[me]
+                        state["program"] = source
+                        response_payload = state_program(source, me)
                         print(
-                            f"[{stamp()}] PROGRAM -> input {program_source} "
+                            f"[{stamp()}] M/E {me + 1} PROGRAM -> input {source} "
                             f"from {addr[0]}:{addr[1]}"
                         )
 
                 elif cmd_name == "CPvI" and len(body) >= 4:
                     me, source = struct.unpack("!BxH", body[:4])
-                    if me == 0:
-                        preview_source = source
-                        response_payload = state_preview(preview_source)
+                    if me in mix_effects:
+                        state = mix_effects[me]
+                        state["preview"] = source
+                        response_payload = state_preview(source, me)
                         print(
-                            f"[{stamp()}] PREVIEW -> input {preview_source} "
+                            f"[{stamp()}] M/E {me + 1} PREVIEW -> input {source} "
                             f"from {addr[0]}:{addr[1]}"
                         )
 
                 elif cmd_name == "DCut" and len(body) >= 1:
                     me = body[0]
-                    if me == 0:
-                        auto_transition = None
-                        transition_position = 0
-                        program_source, preview_source = (
-                            preview_source,
-                            program_source,
+                    if me in mix_effects:
+                        state = mix_effects[me]
+                        auto_transitions.pop(me, None)
+                        state["transition_position"] = 0
+                        state["program"], state["preview"] = (
+                            state["preview"],
+                            state["program"],
                         )
                         response_payload = (
-                            state_program(program_source)
-                            + state_preview(preview_source)
+                            state_program(state["program"], me)
+                            + state_preview(state["preview"], me)
                         )
                         print(
-                            f"[{stamp()}] CUT -> "
-                            f"PGM {program_source} / PVW {preview_source}"
+                            f"[{stamp()}] M/E {me + 1} CUT -> "
+                            f"PGM {state['program']} / PVW {state['preview']}"
                         )
 
                 elif cmd_name == "DAut" and len(body) >= 1:
                     me = body[0]
-                    if me == 0 and auto_transition is None:
-                        frames = max(1, mix_rate)
+                    if me in mix_effects and me not in auto_transitions:
+                        state = mix_effects[me]
+                        frames = max(1, state["mix_rate"])
                         duration = frames / max(1.0, args.fps)
-                        auto_transition = {
+                        auto_transitions[me] = {
                             "started": time.monotonic(),
                             "duration": duration,
                             "frames": frames,
                             "last_position": -1,
                             "last_sent": 0.0,
                         }
-                        transition_position = 0
+                        state["transition_position"] = 0
                         response_payload = state_transition_position(
                             0,
                             in_transition=True,
+                            me=me,
+                            remaining_frames=frames,
                         )
                         print(
-                            f"[{stamp()}] AUTO START -> "
+                            f"[{stamp()}] M/E {me + 1} AUTO START -> "
                             f"{frames} frames / {duration:.3f}s"
                         )
 
@@ -595,11 +601,14 @@ def main():
                     me = body[0]
                     keyer_id = body[1]
                     on_air = body[2] == 1
-                    if me == 0 and keyer_id < len(upstream_keyers):
-                        upstream_keyers[keyer_id] = on_air
-                        response_payload = state_usk_on_air(keyer_id, on_air)
+                    if (
+                        me in mix_effects
+                        and keyer_id < len(mix_effects[me]["upstream_keyers"])
+                    ):
+                        mix_effects[me]["upstream_keyers"][keyer_id] = on_air
+                        response_payload = state_usk_on_air(keyer_id, on_air, me)
                         print(
-                            f"[{stamp()}] USK {keyer_id + 1} -> "
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} -> "
                             f"{'ON AIR' if on_air else 'OFF'}"
                         )
 
@@ -641,54 +650,65 @@ def main():
                 elif cmd_name == "CTTp" and len(body) >= 4:
                     flags = body[0]
                     me = body[1]
-                    if me == 0:
+                    if me in mix_effects:
+                        state = mix_effects[me]
                         if flags & 0x01:
-                            transition_style = body[2]
+                            state["transition_style"] = body[2]
                         if flags & 0x02:
-                            transition_selection = body[3]
+                            state["transition_selection"] = body[3]
                         response_payload = state_transition(
-                            transition_style,
-                            transition_selection,
+                            state["transition_style"],
+                            state["transition_selection"],
+                            me,
                         )
                         print(
-                            f"[{stamp()}] TRANSITION -> style "
-                            f"{transition_style}, selection "
-                            f"0x{transition_selection:02x}"
+                            f"[{stamp()}] M/E {me + 1} TRANSITION -> style "
+                            f"{state['transition_style']}, selection "
+                            f"0x{state['transition_selection']:02x}"
                         )
 
                 elif cmd_name == "CTPs" and len(body) >= 4:
                     me = body[0]
-                    if me == 0:
-                        auto_transition = None
-                        transition_position = struct.unpack(
+                    if me in mix_effects:
+                        state = mix_effects[me]
+                        auto_transitions.pop(me, None)
+                        state["transition_position"] = struct.unpack(
                             "!H", body[2:4]
                         )[0]
                         response_payload = state_transition_position(
-                            transition_position,
-                            in_transition=(transition_position not in (0, 10000)),
+                            state["transition_position"],
+                            in_transition=(
+                                state["transition_position"] not in (0, 10000)
+                            ),
+                            me=me,
                         )
                         print(
-                            f"[{stamp()}] T-BAR -> {transition_position}"
+                            f"[{stamp()}] M/E {me + 1} T-BAR -> "
+                            f"{state['transition_position']}"
                         )
 
-                        if transition_position >= 10000:
-                            program_source, preview_source = (
-                                preview_source,
-                                program_source,
+                        if state["transition_position"] >= 10000:
+                            state["program"], state["preview"] = (
+                                state["preview"],
+                                state["program"],
                             )
-                            transition_position = 0
+                            state["transition_position"] = 0
                             response_payload += (
-                                state_program(program_source)
-                                + state_preview(preview_source)
-                                + state_transition_position(0, False)
+                                state_program(state["program"], me)
+                                + state_preview(state["preview"], me)
+                                + state_transition_position(0, False, me)
                             )
 
                 elif cmd_name == "CTMx" and len(body) >= 2:
                     me = body[0]
-                    if me == 0:
-                        mix_rate = body[1]
-                        response_payload = state_mix_rate(mix_rate)
-                        print(f"[{stamp()}] MIX RATE -> {mix_rate} frames")
+                    if me in mix_effects:
+                        state = mix_effects[me]
+                        state["mix_rate"] = body[1]
+                        response_payload = state_mix_rate(state["mix_rate"], me)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} MIX RATE -> "
+                            f"{state['mix_rate']} frames"
+                        )
 
                 elif cmd_name == "CSBP" and len(body) >= 24:
                     flags = struct.unpack("!H", body[0:2])[0]
