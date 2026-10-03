@@ -15,6 +15,7 @@ It intentionally does not process video.
 import argparse
 import socket
 import struct
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -263,6 +264,12 @@ def main():
     ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--model", default="tvstudio-hd")
     ap.add_argument(
+        "--fps",
+        type=float,
+        default=25.0,
+        help="transition timing base in frames per second (default: 25)",
+    )
+    ap.add_argument(
         "--list-models",
         action="store_true",
         help="list known ATEM profiles and exit",
@@ -287,6 +294,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((args.bind, args.port))
+    sock.settimeout(0.01)
 
     print("ATEM Mock")
     print(f"Model: {profile['name']} ({args.model})")
@@ -308,6 +316,7 @@ def main():
     transition_selection = 1
     transition_position = 0
     mix_rate = 25
+    auto_transition = None
 
     supersource_boxes = [
         {
@@ -335,7 +344,64 @@ def main():
     }
 
     while True:
-        data, addr = sock.recvfrom(65535)
+        # Drive an AUTO transition independently of incoming controller traffic.
+        if auto_transition is not None:
+            now = time.monotonic()
+            elapsed = now - auto_transition["started"]
+            duration = auto_transition["duration"]
+            progress = 1.0 if duration <= 0 else min(1.0, elapsed / duration)
+            position = int(round(progress * 10000))
+
+            if (
+                position != auto_transition["last_position"]
+                and (
+                    now - auto_transition["last_sent"] >= 1.0 / args.fps
+                    or position >= 10000
+                )
+            ):
+                remaining = max(
+                    0,
+                    int(round((1.0 - progress) * auto_transition["frames"])),
+                )
+                payload = command(
+                    "TrPs",
+                    struct.pack(
+                        "!BBBBH2x",
+                        0,
+                        1 if position < 10000 else 0,
+                        remaining,
+                        0,
+                        position,
+                    ),
+                )
+                broadcast_state(sock, clients, payload)
+                auto_transition["last_position"] = position
+                auto_transition["last_sent"] = now
+
+            if progress >= 1.0:
+                program_source, preview_source = (
+                    preview_source,
+                    program_source,
+                )
+                transition_position = 0
+                broadcast_state(
+                    sock,
+                    clients,
+                    state_program(program_source)
+                    + state_preview(preview_source)
+                    + state_transition_position(0, False),
+                )
+                print(
+                    f"[{stamp()}] AUTO COMPLETE -> "
+                    f"PGM {program_source} / PVW {preview_source}"
+                )
+                auto_transition = None
+
+        try:
+            data, addr = sock.recvfrom(65535)
+        except socket.timeout:
+            continue
+
         p = parse_packet(data)
         if p is None:
             continue
@@ -450,6 +516,8 @@ def main():
                 elif cmd_name == "DCut" and len(body) >= 1:
                     me = body[0]
                     if me == 0:
+                        auto_transition = None
+                        transition_position = 0
                         program_source, preview_source = (
                             preview_source,
                             program_source,
@@ -465,19 +533,24 @@ def main():
 
                 elif cmd_name == "DAut" and len(body) >= 1:
                     me = body[0]
-                    if me == 0:
-                        # First implementation completes AUTO immediately.
-                        program_source, preview_source = (
-                            preview_source,
-                            program_source,
-                        )
-                        response_payload = (
-                            state_program(program_source)
-                            + state_preview(preview_source)
+                    if me == 0 and auto_transition is None:
+                        frames = max(1, mix_rate)
+                        duration = frames / max(1.0, args.fps)
+                        auto_transition = {
+                            "started": time.monotonic(),
+                            "duration": duration,
+                            "frames": frames,
+                            "last_position": -1,
+                            "last_sent": 0.0,
+                        }
+                        transition_position = 0
+                        response_payload = state_transition_position(
+                            0,
+                            in_transition=True,
                         )
                         print(
-                            f"[{stamp()}] AUTO -> "
-                            f"PGM {program_source} / PVW {preview_source}"
+                            f"[{stamp()}] AUTO START -> "
+                            f"{frames} frames / {duration:.3f}s"
                         )
 
                 elif cmd_name == "CKOn" and len(body) >= 3:
@@ -548,6 +621,7 @@ def main():
                 elif cmd_name == "CTPs" and len(body) >= 4:
                     me = body[0]
                     if me == 0:
+                        auto_transition = None
                         transition_position = struct.unpack(
                             "!H", body[2:4]
                         )[0]
