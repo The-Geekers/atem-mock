@@ -156,7 +156,7 @@ def state_supersource_box(box_id: int, box):
     return command(
         "SSBP",
         struct.pack(
-            "!BBBBHhhHBBHHHH",
+            "!BBBBHhhHBBHHHH2x",
             0,
             box_id,
             1 if box["enabled"] else 0,
