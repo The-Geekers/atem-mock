@@ -131,6 +131,68 @@ def state_transition(style: int, selection: int = 1):
     )
 
 
+def state_transition_position(handle_position: int, in_transition=False):
+    # TrPs: M/E, inTransition, remainingFrames, pad, handlePosition.
+    return command(
+        "TrPs",
+        struct.pack(
+            "!BBBBH2x",
+            0,
+            1 if in_transition else 0,
+            0,
+            0,
+            handle_position,
+        ),
+    )
+
+
+def state_mix_rate(rate: int):
+    return command("TMxP", struct.pack("!BB2x", 0, rate))
+
+
+def state_supersource_box(box_id: int, box):
+    # SSBP v8+: ssrcId, boxId, enabled, pad, source, x, y, size,
+    # cropped, pad, cropTop, cropBottom, cropLeft, cropRight.
+    return command(
+        "SSBP",
+        struct.pack(
+            "!BBBBHhhHBBHHHH",
+            0,
+            box_id,
+            1 if box["enabled"] else 0,
+            0,
+            box["source"],
+            box["x"],
+            box["y"],
+            box["size"],
+            1 if box["cropped"] else 0,
+            0,
+            box["crop_top"],
+            box["crop_bottom"],
+            box["crop_left"],
+            box["crop_right"],
+        ),
+    )
+
+
+def state_supersource_properties(props):
+    return command(
+        "SSrc",
+        struct.pack(
+            "!BBHHBBHHB3x",
+            0,
+            0,
+            props["art_fill_source"],
+            props["art_cut_source"],
+            props["art_option"],
+            1 if props["art_pre_multiplied"] else 0,
+            props["art_clip"],
+            props["art_gain"],
+            1 if props["art_invert_key"] else 0,
+        ),
+    )
+
+
 def initial_state(profile=None):
     """Return a known working ATEM initialization stream."""
     if profile and profile.get("bootstrap", "").endswith(".data"):
@@ -244,6 +306,33 @@ def main():
     aux_sources = [1, 1]
     transition_style = 0
     transition_selection = 1
+    transition_position = 0
+    mix_rate = 25
+
+    supersource_boxes = [
+        {
+            "enabled": False,
+            "source": 1,
+            "x": 0,
+            "y": 0,
+            "size": 1000,
+            "cropped": False,
+            "crop_top": 0,
+            "crop_bottom": 0,
+            "crop_left": 0,
+            "crop_right": 0,
+        }
+        for _ in range(4)
+    ]
+    supersource_properties = {
+        "art_fill_source": 0,
+        "art_cut_source": 0,
+        "art_option": 0,
+        "art_pre_multiplied": False,
+        "art_clip": 0,
+        "art_gain": 0,
+        "art_invert_key": False,
+    }
 
     while True:
         data, addr = sock.recvfrom(65535)
@@ -455,6 +544,107 @@ def main():
                             f"{transition_style}, selection "
                             f"0x{transition_selection:02x}"
                         )
+
+                elif cmd_name == "CTPs" and len(body) >= 4:
+                    me = body[0]
+                    if me == 0:
+                        transition_position = struct.unpack(
+                            "!H", body[2:4]
+                        )[0]
+                        response_payload = state_transition_position(
+                            transition_position,
+                            in_transition=(transition_position not in (0, 10000)),
+                        )
+                        print(
+                            f"[{stamp()}] T-BAR -> {transition_position}"
+                        )
+
+                        if transition_position >= 10000:
+                            program_source, preview_source = (
+                                preview_source,
+                                program_source,
+                            )
+                            transition_position = 0
+                            response_payload += (
+                                state_program(program_source)
+                                + state_preview(preview_source)
+                                + state_transition_position(0, False)
+                            )
+
+                elif cmd_name == "CTMx" and len(body) >= 2:
+                    me = body[0]
+                    if me == 0:
+                        mix_rate = body[1]
+                        response_payload = state_mix_rate(mix_rate)
+                        print(f"[{stamp()}] MIX RATE -> {mix_rate} frames")
+
+                elif cmd_name == "CSBP" and len(body) >= 24:
+                    flags = struct.unpack("!H", body[0:2])[0]
+                    ssrc_id = body[2]
+                    box_id = body[3]
+                    if ssrc_id == 0 and box_id < len(supersource_boxes):
+                        box = supersource_boxes[box_id]
+
+                        if flags & (1 << 0):
+                            box["enabled"] = body[4] == 1
+                        if flags & (1 << 1):
+                            box["source"] = struct.unpack("!H", body[6:8])[0]
+                        if flags & (1 << 2):
+                            box["x"] = struct.unpack("!h", body[8:10])[0]
+                        if flags & (1 << 3):
+                            box["y"] = struct.unpack("!h", body[10:12])[0]
+                        if flags & (1 << 4):
+                            box["size"] = struct.unpack("!H", body[12:14])[0]
+                        if flags & (1 << 5):
+                            box["cropped"] = body[14] == 1
+                        if flags & (1 << 6):
+                            box["crop_top"] = struct.unpack("!H", body[16:18])[0]
+                        if flags & (1 << 7):
+                            box["crop_bottom"] = struct.unpack("!H", body[18:20])[0]
+                        if flags & (1 << 8):
+                            box["crop_left"] = struct.unpack("!H", body[20:22])[0]
+                        if flags & (1 << 9):
+                            box["crop_right"] = struct.unpack("!H", body[22:24])[0]
+
+                        response_payload = state_supersource_box(box_id, box)
+                        print(
+                            f"[{stamp()}] SUPERSOURCE BOX {box_id + 1} -> "
+                            f"{'ON' if box['enabled'] else 'OFF'}, "
+                            f"src {box['source']}, x {box['x']}, "
+                            f"y {box['y']}, size {box['size']}"
+                        )
+
+                elif cmd_name == "CSSc" and len(body) >= 13:
+                    flags = body[0]
+                    ssrc_id = body[1]
+                    if ssrc_id == 0:
+                        if flags & (1 << 0):
+                            supersource_properties["art_fill_source"] = struct.unpack(
+                                "!H", body[2:4]
+                            )[0]
+                        if flags & (1 << 1):
+                            supersource_properties["art_cut_source"] = struct.unpack(
+                                "!H", body[4:6]
+                            )[0]
+                        if flags & (1 << 2):
+                            supersource_properties["art_option"] = body[6]
+                        if flags & (1 << 3):
+                            supersource_properties["art_pre_multiplied"] = body[7] == 1
+                        if flags & (1 << 4):
+                            supersource_properties["art_clip"] = struct.unpack(
+                                "!H", body[8:10]
+                            )[0]
+                        if flags & (1 << 5):
+                            supersource_properties["art_gain"] = struct.unpack(
+                                "!H", body[10:12]
+                            )[0]
+                        if flags & (1 << 6):
+                            supersource_properties["art_invert_key"] = body[12] == 1
+
+                        response_payload = state_supersource_properties(
+                            supersource_properties
+                        )
+                        print(f"[{stamp()}] SUPERSOURCE properties updated")
 
                 if response_payload:
                     broadcast_state(sock, clients, response_payload)
