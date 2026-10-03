@@ -30,7 +30,9 @@ PROFILES = {
     "mini-extreme": {
         "name": "ATEM Mini Extreme",
         "family": "mini",
-        "implemented": False,
+        "implemented": True,
+        "bootstrap": "profiles_data/mini-extreme-v8.6.data",
+        "notes": "Captured startup state from a real ATEM Mini Extreme (protocol v8.6).",
     },
     "mini-extreme-iso": {
         "name": "ATEM Mini Extreme ISO",
