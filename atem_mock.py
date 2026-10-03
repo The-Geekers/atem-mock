@@ -142,12 +142,20 @@ def main():
             print(f"[{stamp()}] client {peer[0]}:{peer[1]} -> handshake")
             continue
 
-        # Modern Software Control switches to 0x8000 + client id after init.
+        # The client switches to 0x8000 + client id during the handshake, but
+        # that alone does NOT mean the handshake is complete. Wait for its ACK
+        # reply to the INIT response (ack id 0) before sending switcher state.
         expected_session = 0x8000 + args.client_id
-        if p["session"] == expected_session and not established:
+        if (
+            not established
+            and p["session"] == expected_session
+            and (p["flags"] & FLAG_ACK)
+            and p["ack"] == 0
+        ):
             established = True
             session = expected_session
             peer = addr
+            print(f"[{stamp()}] handshake ACK received")
             print(f"[{stamp()}] session established: 0x{session:04x}")
 
         if not established:
