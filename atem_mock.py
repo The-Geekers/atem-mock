@@ -86,19 +86,18 @@ def parse_commands(payload: bytes):
     return commands
 
 
-def state_program(program_source: int):
-    return command("PrgI", struct.pack("!BxH", 0, program_source))
+def state_program(program_source: int, me: int = 0):
+    return command("PrgI", struct.pack("!BxH", me, program_source))
 
 
-def state_preview(preview_source: int):
-    # The reference Television Studio HD state uses an extra 4 bytes here.
-    return command("PrvI", struct.pack("!BxH4x", 0, preview_source))
+def state_preview(preview_source: int, me: int = 0):
+    return command("PrvI", struct.pack("!BxH4x", me, preview_source))
 
 
-def state_usk_on_air(keyer_id: int, on_air: bool):
+def state_usk_on_air(keyer_id: int, on_air: bool, me: int = 0):
     return command(
         "KeOn",
-        struct.pack("!BBBB", 0, keyer_id, 1 if on_air else 0, 0),
+        struct.pack("!BBBB", me, keyer_id, 1 if on_air else 0, 0),
     )
 
 
@@ -123,32 +122,32 @@ def state_aux(aux_bus: int, source: int):
     return command("AuxS", struct.pack("!BBH", aux_bus, 0, source))
 
 
-def state_transition(style: int, selection: int = 1):
+def state_transition(style: int, selection: int = 1, me: int = 0):
     # TrSS: M/E, current style, current selection, next style,
     # next selection (+ padding).
     return command(
         "TrSS",
-        struct.pack("!BBBBB3x", 0, style, selection, style, selection),
+        struct.pack("!BBBBB3x", me, style, selection, style, selection),
     )
 
 
-def state_transition_position(handle_position: int, in_transition=False):
+def state_transition_position(handle_position: int, in_transition=False, me: int = 0, remaining_frames: int = 0):
     # TrPs: M/E, inTransition, remainingFrames, pad, handlePosition.
     return command(
         "TrPs",
         struct.pack(
             "!BBBBH2x",
-            0,
+            me,
             1 if in_transition else 0,
-            0,
+            remaining_frames,
             0,
             handle_position,
         ),
     )
 
 
-def state_mix_rate(rate: int):
-    return command("TMxP", struct.pack("!BB2x", 0, rate))
+def state_mix_rate(rate: int, me: int = 0):
+    return command("TMxP", struct.pack("!BB2x", me, rate))
 
 
 def state_supersource_box(box_id: int, box):
