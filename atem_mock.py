@@ -158,6 +158,115 @@ def state_usk_chroma(me, keyer_id, key):
     )
 
 
+def state_usk_pattern(me, keyer_id, key):
+    p = key["pattern"]
+    return command(
+        "KePt",
+        struct.pack(
+            "!BBBBHHHHHHB1x",
+            me,
+            keyer_id,
+            p["style"],
+            0,
+            p["size"],
+            p["symmetry"],
+            p["softness"],
+            p["position_x"],
+            p["position_y"],
+            0,
+            1 if p["invert"] else 0,
+        ),
+    )
+
+
+def state_usk_dve(me, keyer_id, key):
+    d = key["dve"]
+    return command(
+        "KeDV",
+        struct.pack(
+            "!BB2xIIiiiBBBxHHBBBBB1xHHHHB?HHHHB7x",
+            me,
+            keyer_id,
+            d["size_x"],
+            d["size_y"],
+            d["position_x"],
+            d["position_y"],
+            d["rotation"],
+            1 if d["border_enabled"] else 0,
+            1 if d["shadow_enabled"] else 0,
+            d["border_bevel"],
+            d["border_outer_width"],
+            d["border_inner_width"],
+            d["border_outer_softness"],
+            d["border_inner_softness"],
+            d["border_bevel_softness"],
+            d["border_bevel_position"],
+            d["border_opacity"],
+            d["border_hue"],
+            d["border_saturation"],
+            d["border_luma"],
+            d["light_direction"],
+            d["light_altitude"],
+            d["mask_enabled"],
+            d["mask_top"],
+            d["mask_bottom"],
+            d["mask_left"],
+            d["mask_right"],
+            d["rate"],
+        ),
+    )
+
+
+def state_usk_fly_properties(me, keyer_id, fly):
+    return command(
+        "KeFS",
+        struct.pack(
+            "!BBBBBB2x",
+            me,
+            keyer_id,
+            1 if fly["is_a_set"] else 0,
+            1 if fly["is_b_set"] else 0,
+            0,
+            0,
+        )[:-2]
+        + bytes([fly["is_at_keyframe"], fly["run_to_infinite_index"]]),
+    )
+
+
+def state_usk_keyframe(me, keyer_id, keyframe_id, kf):
+    return command(
+        "KKFP",
+        struct.pack(
+            "!BBBBIIiiiHHBBBBB1xHHHHB1xhhhh4x",
+            me,
+            keyer_id,
+            keyframe_id,
+            0,
+            kf["size_x"],
+            kf["size_y"],
+            kf["position_x"],
+            kf["position_y"],
+            kf["rotation"],
+            kf["border_outer_width"],
+            kf["border_inner_width"],
+            kf["border_outer_softness"],
+            kf["border_inner_softness"],
+            kf["border_bevel_softness"],
+            kf["border_bevel_position"],
+            kf["border_opacity"],
+            kf["border_hue"],
+            kf["border_saturation"],
+            kf["border_luma"],
+            kf["light_direction"],
+            kf["light_altitude"],
+            kf["mask_top"],
+            kf["mask_bottom"],
+            kf["mask_left"],
+            kf["mask_right"],
+        ),
+    )
+
+
 def state_dsk(dsk_id: int, on_air: bool):
     # Protocol >= 8.0.1 DskS layout:
     # id, onAir, inTransition, isAuto, isTowardsOnAir, remainingFrames.
@@ -484,6 +593,94 @@ def bootstrap_mix_effects(profile):
                     "lift": struct.unpack("!H", body[8:10])[0],
                     "narrow": body[10] == 1,
                 }
+            elif name == "KePt" and len(body) >= 15:
+                me = body[0]
+                keyer_id = body[1]
+                key = result.setdefault(me, {}).setdefault("key_states", {}).setdefault(keyer_id, {})
+                key["pattern"] = {
+                    "style": body[2],
+                    "size": struct.unpack("!H", body[4:6])[0],
+                    "symmetry": struct.unpack("!H", body[6:8])[0],
+                    "softness": struct.unpack("!H", body[8:10])[0],
+                    "position_x": struct.unpack("!H", body[10:12])[0],
+                    "position_y": struct.unpack("!H", body[12:14])[0],
+                    "invert": body[14] == 1,
+                }
+            elif name == "KeDV" and len(body) >= 57:
+                me = body[0]
+                keyer_id = body[1]
+                key = result.setdefault(me, {}).setdefault("key_states", {}).setdefault(keyer_id, {})
+                key["dve"] = {
+                    "size_x": struct.unpack("!I", body[4:8])[0],
+                    "size_y": struct.unpack("!I", body[8:12])[0],
+                    "position_x": struct.unpack("!i", body[12:16])[0],
+                    "position_y": struct.unpack("!i", body[16:20])[0],
+                    "rotation": struct.unpack("!i", body[20:24])[0],
+                    "border_enabled": body[24] == 1,
+                    "shadow_enabled": body[25] == 1,
+                    "border_bevel": body[26],
+                    "border_outer_width": struct.unpack("!H", body[28:30])[0],
+                    "border_inner_width": struct.unpack("!H", body[30:32])[0],
+                    "border_outer_softness": body[32],
+                    "border_inner_softness": body[33],
+                    "border_bevel_softness": body[34],
+                    "border_bevel_position": body[35],
+                    "border_opacity": body[36],
+                    "border_hue": struct.unpack("!H", body[38:40])[0],
+                    "border_saturation": struct.unpack("!H", body[40:42])[0],
+                    "border_luma": struct.unpack("!H", body[42:44])[0],
+                    "light_direction": struct.unpack("!H", body[44:46])[0],
+                    "light_altitude": body[46],
+                    "mask_enabled": body[47] == 1,
+                    "mask_top": struct.unpack("!H", body[48:50])[0],
+                    "mask_bottom": struct.unpack("!H", body[50:52])[0],
+                    "mask_left": struct.unpack("!H", body[52:54])[0],
+                    "mask_right": struct.unpack("!H", body[54:56])[0],
+                    "rate": body[56],
+                }
+            elif name == "KeFS" and len(body) >= 8:
+                me = body[0]
+                keyer_id = body[1]
+                key = result.setdefault(me, {}).setdefault("key_states", {}).setdefault(keyer_id, {})
+                key["fly"] = {
+                    "is_a_set": body[2] == 1,
+                    "is_b_set": body[3] == 1,
+                    "is_at_keyframe": body[6],
+                    "run_to_infinite_index": body[7],
+                    "keyframes": {},
+                }
+            elif name == "KKFP" and len(body) >= 52:
+                me = body[0]
+                keyer_id = body[1]
+                frame_id = body[2]
+                key = result.setdefault(me, {}).setdefault("key_states", {}).setdefault(keyer_id, {})
+                fly = key.setdefault("fly", {
+                    "is_a_set": False, "is_b_set": False, "is_at_keyframe": 0,
+                    "run_to_infinite_index": 0, "keyframes": {}
+                })
+                fly.setdefault("keyframes", {})[frame_id] = {
+                    "size_x": struct.unpack("!I", body[4:8])[0],
+                    "size_y": struct.unpack("!I", body[8:12])[0],
+                    "position_x": struct.unpack("!i", body[12:16])[0],
+                    "position_y": struct.unpack("!i", body[16:20])[0],
+                    "rotation": struct.unpack("!i", body[20:24])[0],
+                    "border_outer_width": struct.unpack("!H", body[24:26])[0],
+                    "border_inner_width": struct.unpack("!H", body[26:28])[0],
+                    "border_outer_softness": body[28],
+                    "border_inner_softness": body[29],
+                    "border_bevel_softness": body[30],
+                    "border_bevel_position": body[31],
+                    "border_opacity": body[32],
+                    "border_hue": struct.unpack("!H", body[34:36])[0],
+                    "border_saturation": struct.unpack("!H", body[36:38])[0],
+                    "border_luma": struct.unpack("!H", body[38:40])[0],
+                    "light_direction": struct.unpack("!H", body[40:42])[0],
+                    "light_altitude": body[42],
+                    "mask_top": struct.unpack("!h", body[44:46])[0],
+                    "mask_bottom": struct.unpack("!h", body[46:48])[0],
+                    "mask_left": struct.unpack("!h", body[48:50])[0],
+                    "mask_right": struct.unpack("!h", body[50:52])[0],
+                }
 
     if not result:
         result[0] = {}
@@ -527,6 +724,34 @@ def bootstrap_mix_effects(profile):
                     "y_suppress": 0,
                     "lift": 0,
                     "narrow": False,
+                },
+            )
+            key.setdefault(
+                "pattern",
+                {
+                    "style": 0, "size": 0, "symmetry": 0, "softness": 0,
+                    "position_x": 0, "position_y": 0, "invert": False,
+                },
+            )
+            key.setdefault(
+                "dve",
+                {
+                    "size_x": 1000, "size_y": 1000, "position_x": 0, "position_y": 0,
+                    "rotation": 0, "border_enabled": False, "shadow_enabled": False,
+                    "border_bevel": 0, "border_outer_width": 0, "border_inner_width": 0,
+                    "border_outer_softness": 0, "border_inner_softness": 0,
+                    "border_bevel_softness": 0, "border_bevel_position": 0,
+                    "border_opacity": 0, "border_hue": 0, "border_saturation": 0,
+                    "border_luma": 0, "light_direction": 0, "light_altitude": 0,
+                    "mask_enabled": False, "mask_top": 0, "mask_bottom": 0,
+                    "mask_left": 0, "mask_right": 0, "rate": 0,
+                },
+            )
+            key.setdefault(
+                "fly",
+                {
+                    "is_a_set": False, "is_b_set": False, "is_at_keyframe": 0,
+                    "run_to_infinite_index": 0, "keyframes": {},
                 },
             )
 
