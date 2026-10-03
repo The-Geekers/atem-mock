@@ -17,6 +17,8 @@ import socket
 import struct
 from datetime import datetime
 
+from profiles import format_profiles, get_profile
+
 PORT = 9910
 HEADER_SIZE = 12
 
@@ -120,30 +122,84 @@ def initial_state():
     state.append(command("InCm", b"\x01\x00\x00\x00", reserved=0x0000))
     return state
 
+class ClientSession:
+    def __init__(self, addr, client_id):
+        self.addr = addr
+        self.client_id = client_id
+        self.session = 0x8000 + client_id
+        self.established = False
+        self.state_sent = False
+        self.next_packet_id = 1
+        self.seen_rx = set()
+
+    def next_id(self):
+        packet_id = self.next_packet_id
+        self.next_packet_id += 1
+        if self.next_packet_id >= 0x8000:
+            self.next_packet_id = 0
+        return packet_id
+
+
+def send_state_packet(sock, client, payload):
+    packet_id = client.next_id()
+    pkt = make_packet(
+        FLAG_COMMAND,
+        client.session,
+        packet_id=packet_id,
+        payload=payload,
+    )
+    sock.sendto(pkt, client.addr)
+    return packet_id
+
+
+def broadcast_state(sock, clients, payload):
+    for client in clients.values():
+        if client.established:
+            send_state_packet(sock, client, payload)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=PORT)
-    ap.add_argument("--client-id", type=int, default=1)
+    ap.add_argument("--model", default="tvstudio-hd")
+    ap.add_argument(
+        "--list-models",
+        action="store_true",
+        help="list known ATEM profiles and exit",
+    )
     args = ap.parse_args()
+
+    if args.list_models:
+        print(format_profiles())
+        return
+
+    profile = get_profile(args.model)
+    if profile is None:
+        raise SystemExit(
+            f"Unknown model '{args.model}'. Use --list-models."
+        )
+    if not profile.get("implemented"):
+        raise SystemExit(
+            f"{profile['name']} profile is planned but not implemented yet. "
+            "Use --list-models to see profile status."
+        )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((args.bind, args.port))
 
-    print("ATEM Mock - bootstrap profile")
+    print("ATEM Mock")
+    print(f"Model: {profile['name']} ({args.model})")
     print(f"Listening on UDP {args.bind}:{args.port}")
-    print("Connect ATEM Software Control to 127.0.0.1")
+    print("Software Control / Companion can connect to this host.")
     print("Ctrl-C to stop.\n")
 
-    peer = None
-    session = None
-    established = False
-    state_sent = False
-    next_packet_id = 1
-    seen_rx = set()
+    clients = {}
+    next_client_id = 1
 
-    # Initial values from the reference Television Studio HD dump.
+    # Shared virtual-switcher state. Every connected ATEM client sees the same
+    # Program/Preview state, like several control surfaces on one real switcher.
     program_source = 5
     preview_source = 1
 
@@ -153,48 +209,89 @@ def main():
         if p is None:
             continue
 
-        key = (p["flags"], p["session"], p["ack"], p["packet_id"], p["payload"])
-        first_time = key not in seen_rx
-        seen_rx.add(key)
-
-        # Initial client hello / disconnect-init.
+        # Initial hello. A new UDP endpoint represents another ATEM control
+        # client (Software Control, Companion, etc.).
         if (p["flags"] & FLAG_INIT) and p["payload"][:1] in (b"\x01", b"\x04"):
-            peer = addr
-            session = p["session"]
-            payload = struct.pack("!HH4x", 0x0200, args.client_id)
-            response = make_packet(FLAG_INIT, session, payload=payload)
-            sock.sendto(response, peer)
-            print(f"[{stamp()}] client {peer[0]}:{peer[1]} -> handshake")
+            client = clients.get(addr)
+            if client is None or p["payload"][:1] == b"\x04":
+                client = ClientSession(addr, next_client_id)
+                clients[addr] = client
+                next_client_id += 1
+                if next_client_id >= 0x7FFF:
+                    next_client_id = 1
+
+            response_payload = struct.pack(
+                "!HH4x", 0x0200, client.client_id
+            )
+            response = make_packet(
+                FLAG_INIT,
+                p["session"],
+                payload=response_payload,
+            )
+            sock.sendto(response, addr)
+            print(
+                f"[{stamp()}] client {addr[0]}:{addr[1]} "
+                f"-> handshake (id={client.client_id})"
+            )
             continue
 
-        # The client switches to 0x8000 + client id during the handshake, but
-        # that alone does NOT mean the handshake is complete. Wait for its ACK
-        # reply to the INIT response (ack id 0) before sending switcher state.
-        expected_session = 0x8000 + args.client_id
+        client = clients.get(addr)
+        if client is None:
+            continue
+
+        key = (
+            p["flags"],
+            p["session"],
+            p["ack"],
+            p["packet_id"],
+            p["payload"],
+        )
+        first_time = key not in client.seen_rx
+        client.seen_rx.add(key)
+
+        # Handshake completes when the client ACKs our INIT response while
+        # using its assigned session id.
         if (
-            not established
-            and p["session"] == expected_session
+            not client.established
+            and p["session"] == client.session
             and (p["flags"] & FLAG_ACK)
             and p["ack"] == 0
         ):
-            established = True
-            session = expected_session
-            peer = addr
-            print(f"[{stamp()}] handshake ACK received")
-            print(f"[{stamp()}] session established: 0x{session:04x}")
+            client.established = True
+            print(
+                f"[{stamp()}] session established: "
+                f"{addr[0]}:{addr[1]} / 0x{client.session:04x}"
+            )
 
-        if not established:
+        if not client.established:
             continue
 
-        # ACK every client command/retransmission packet. This prevents the
-        # retransmission flood seen in the first probe.
+        # ACK every control packet/retransmission from this client.
         if p["flags"] & (FLAG_COMMAND | FLAG_RETRANSMIT):
-            ack = make_packet(FLAG_ACK, session, ack=p["packet_id"])
-            sock.sendto(ack, peer)
-            if first_time and p["packet_id"]:
-                print(f"[{stamp()}] ACK client packet #{p['packet_id']}")
+            ack = make_packet(
+                FLAG_ACK,
+                client.session,
+                ack=p["packet_id"],
+            )
+            sock.sendto(ack, client.addr)
 
-        # Process commands sent by ATEM Software Control.
+        # Each newly connected controller receives a full ATEM initialization
+        # stream followed by the current shared Program/Preview state.
+        if not client.state_sent:
+            for payload in initial_state():
+                send_state_packet(sock, client, payload)
+
+            send_state_packet(sock, client, state_program(program_source))
+            send_state_packet(sock, client, state_preview(preview_source))
+
+            client.state_sent = True
+            print(
+                f"[{stamp()}] initialization sent to "
+                f"{addr[0]}:{addr[1]}"
+            )
+
+        # Process control commands. State changes are broadcast to every
+        # connected ATEM client so Software Control and Companion stay synced.
         if p["payload"]:
             for cmd_name, body in parse_commands(p["payload"]):
                 response_payload = None
@@ -204,19 +301,28 @@ def main():
                     if me == 0:
                         program_source = source
                         response_payload = state_program(program_source)
-                        print(f"[{stamp()}] PROGRAM -> input {program_source}")
+                        print(
+                            f"[{stamp()}] PROGRAM -> input {program_source} "
+                            f"from {addr[0]}:{addr[1]}"
+                        )
 
                 elif cmd_name == "CPvI" and len(body) >= 4:
                     me, source = struct.unpack("!BxH", body[:4])
                     if me == 0:
                         preview_source = source
                         response_payload = state_preview(preview_source)
-                        print(f"[{stamp()}] PREVIEW -> input {preview_source}")
+                        print(
+                            f"[{stamp()}] PREVIEW -> input {preview_source} "
+                            f"from {addr[0]}:{addr[1]}"
+                        )
 
                 elif cmd_name == "DCut" and len(body) >= 1:
                     me = body[0]
                     if me == 0:
-                        program_source, preview_source = preview_source, program_source
+                        program_source, preview_source = (
+                            preview_source,
+                            program_source,
+                        )
                         response_payload = (
                             state_program(program_source)
                             + state_preview(preview_source)
@@ -229,9 +335,11 @@ def main():
                 elif cmd_name == "DAut" and len(body) >= 1:
                     me = body[0]
                     if me == 0:
-                        # First milestone: complete AUTO immediately.
-                        # Transition animation/state will be implemented next.
-                        program_source, preview_source = preview_source, program_source
+                        # First implementation completes AUTO immediately.
+                        program_source, preview_source = (
+                            preview_source,
+                            program_source,
+                        )
                         response_payload = (
                             state_program(program_source)
                             + state_preview(preview_source)
@@ -242,42 +350,7 @@ def main():
                         )
 
                 if response_payload:
-                    pkt = make_packet(
-                        FLAG_COMMAND,
-                        session,
-                        packet_id=next_packet_id,
-                        payload=response_payload,
-                    )
-                    sock.sendto(pkt, peer)
-                    next_packet_id += 1
-
-        # As soon as the transport session exists, push the minimal switcher
-        # state. Each state packet is reliable and therefore gets a packet id.
-        if not state_sent:
-            for payload in initial_state():
-                pkt = make_packet(
-                    FLAG_COMMAND,
-                    session,
-                    packet_id=next_packet_id,
-                    payload=payload,
-                )
-                sock.sendto(pkt, peer)
-                print(
-                    f"[{stamp()}] TX state packet #{next_packet_id} "
-                    f"({len(payload)} bytes)"
-                )
-                next_packet_id += 1
-
-            state_sent = True
-            print(f"[{stamp()}] initialization state sent")
-            print(">>> Check ATEM Software Control now. <<<")
-
-        # Only display meaningful acknowledgements once.
-        if (p["flags"] & FLAG_ACK) and first_time:
-            print(
-                f"[{stamp()}] client ACK "
-                f"(ack={p['ack']}, id={p['packet_id']})"
-            )
+                    broadcast_state(sock, clients, response_payload)
 
 
 if __name__ == "__main__":
