@@ -342,18 +342,19 @@ def main():
     clients = {}
     next_client_id = 1
 
-    # Shared virtual-switcher state. Every connected ATEM client sees the same
-    # Program/Preview state, like several control surfaces on one real switcher.
-    program_source = 5
-    preview_source = 1
-    upstream_keyers = [False, False, False, False]
+    # Shared switcher state, derived from the selected model's startup capture.
+    mix_effects = bootstrap_mix_effects(profile)
     downstream_keyers = [False, False]
     aux_sources = [1, 1]
-    transition_style = 0
-    transition_selection = 1
-    transition_position = 0
-    mix_rate = 25
-    auto_transition = None
+    auto_transitions = {}
+
+    print(
+        "Detected M/E topology: "
+        + ", ".join(
+            f"M/E {me + 1} ({state['key_count']} keyers)"
+            for me, state in mix_effects.items()
+        )
+    )
 
     supersource_boxes = [
         {
@@ -381,58 +382,57 @@ def main():
     }
 
     while True:
-        # Drive an AUTO transition independently of incoming controller traffic.
-        if auto_transition is not None:
-            now = time.monotonic()
-            elapsed = now - auto_transition["started"]
-            duration = auto_transition["duration"]
+        # Drive independent AUTO transitions for every M/E.
+        now = time.monotonic()
+        for me, transition in list(auto_transitions.items()):
+            state = mix_effects[me]
+            elapsed = now - transition["started"]
+            duration = transition["duration"]
             progress = 1.0 if duration <= 0 else min(1.0, elapsed / duration)
             position = int(round(progress * 10000))
 
             if (
-                position != auto_transition["last_position"]
+                position != transition["last_position"]
                 and (
-                    now - auto_transition["last_sent"] >= 1.0 / args.fps
+                    now - transition["last_sent"] >= 1.0 / args.fps
                     or position >= 10000
                 )
             ):
                 remaining = max(
                     0,
-                    int(round((1.0 - progress) * auto_transition["frames"])),
+                    int(round((1.0 - progress) * transition["frames"])),
                 )
-                payload = command(
-                    "TrPs",
-                    struct.pack(
-                        "!BBBBH2x",
-                        0,
-                        1 if position < 10000 else 0,
-                        remaining,
-                        0,
-                        position,
-                    ),
-                )
-                broadcast_state(sock, clients, payload)
-                auto_transition["last_position"] = position
-                auto_transition["last_sent"] = now
-
-            if progress >= 1.0:
-                program_source, preview_source = (
-                    preview_source,
-                    program_source,
-                )
-                transition_position = 0
                 broadcast_state(
                     sock,
                     clients,
-                    state_program(program_source)
-                    + state_preview(preview_source)
-                    + state_transition_position(0, False),
+                    state_transition_position(
+                        position,
+                        in_transition=(position < 10000),
+                        me=me,
+                        remaining_frames=remaining,
+                    ),
+                )
+                transition["last_position"] = position
+                transition["last_sent"] = now
+
+            if progress >= 1.0:
+                state["program"], state["preview"] = (
+                    state["preview"],
+                    state["program"],
+                )
+                state["transition_position"] = 0
+                broadcast_state(
+                    sock,
+                    clients,
+                    state_program(state["program"], me)
+                    + state_preview(state["preview"], me)
+                    + state_transition_position(0, False, me),
                 )
                 print(
-                    f"[{stamp()}] AUTO COMPLETE -> "
-                    f"PGM {program_source} / PVW {preview_source}"
+                    f"[{stamp()}] M/E {me + 1} AUTO COMPLETE -> "
+                    f"PGM {state['program']} / PVW {state['preview']}"
                 )
-                auto_transition = None
+                del auto_transitions[me]
 
         try:
             data, addr = sock.recvfrom(65535)
@@ -510,13 +510,14 @@ def main():
             sock.sendto(ack, client.addr)
 
         # Each newly connected controller receives a full ATEM initialization
-        # stream followed by the current shared Program/Preview state.
+        # stream followed by the current live state of every M/E.
         if not client.state_sent:
             for payload in initial_state(profile):
                 send_state_packet(sock, client, payload)
 
-            send_state_packet(sock, client, state_program(program_source))
-            send_state_packet(sock, client, state_preview(preview_source))
+            for me, state in mix_effects.items():
+                send_state_packet(sock, client, state_program(state["program"], me))
+                send_state_packet(sock, client, state_preview(state["preview"], me))
 
             client.state_sent = True
             print(
