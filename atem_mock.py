@@ -181,10 +181,11 @@ def state_usk_pattern(me, keyer_id, key):
 
 def state_usk_dve(me, keyer_id, key):
     d = key["dve"]
+    # KeDV response body is exactly 60 bytes on current ATEM protocol.
     return command(
         "KeDV",
         struct.pack(
-            "!BB2xIIiiiBBBxHHBBBBB1xHHHHB?HHHHB7x",
+            "!BB2xIIiiiBBBxHHBBBBBxHHHHBBHHHHB3x",
             me,
             keyer_id,
             d["size_x"],
@@ -207,7 +208,7 @@ def state_usk_dve(me, keyer_id, key):
             d["border_luma"],
             d["light_direction"],
             d["light_altitude"],
-            d["mask_enabled"],
+            1 if d["mask_enabled"] else 0,
             d["mask_top"],
             d["mask_bottom"],
             d["mask_left"],
