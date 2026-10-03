@@ -94,6 +94,43 @@ def state_preview(preview_source: int):
     return command("PrvI", struct.pack("!BxH4x", 0, preview_source))
 
 
+def state_usk_on_air(keyer_id: int, on_air: bool):
+    return command(
+        "KeOn",
+        struct.pack("!BBBB", 0, keyer_id, 1 if on_air else 0, 0),
+    )
+
+
+def state_dsk(dsk_id: int, on_air: bool):
+    # Protocol >= 8.0.1 DskS layout:
+    # id, onAir, inTransition, isAuto, isTowardsOnAir, remainingFrames.
+    return command(
+        "DskS",
+        struct.pack(
+            "!BBBBBB2x",
+            dsk_id,
+            1 if on_air else 0,
+            0,
+            0,
+            0,
+            0,
+        ),
+    )
+
+
+def state_aux(aux_bus: int, source: int):
+    return command("AuxS", struct.pack("!BBH", aux_bus, 0, source))
+
+
+def state_transition(style: int, selection: int = 1):
+    # TrSS: M/E, current style, current selection, next style,
+    # next selection (+ padding).
+    return command(
+        "TrSS",
+        struct.pack("!BBBBB3x", 0, style, selection, style, selection),
+    )
+
+
 def initial_state(profile=None):
     """Return a known working ATEM initialization stream."""
     if profile and profile.get("bootstrap", "").endswith(".data"):
@@ -202,6 +239,11 @@ def main():
     # Program/Preview state, like several control surfaces on one real switcher.
     program_source = 5
     preview_source = 1
+    upstream_keyers = [False, False, False, False]
+    downstream_keyers = [False, False]
+    aux_sources = [1, 1]
+    transition_style = 0
+    transition_selection = 1
 
     while True:
         data, addr = sock.recvfrom(65535)
@@ -347,6 +389,71 @@ def main():
                         print(
                             f"[{stamp()}] AUTO -> "
                             f"PGM {program_source} / PVW {preview_source}"
+                        )
+
+                elif cmd_name == "CKOn" and len(body) >= 3:
+                    me = body[0]
+                    keyer_id = body[1]
+                    on_air = body[2] == 1
+                    if me == 0 and keyer_id < len(upstream_keyers):
+                        upstream_keyers[keyer_id] = on_air
+                        response_payload = state_usk_on_air(keyer_id, on_air)
+                        print(
+                            f"[{stamp()}] USK {keyer_id + 1} -> "
+                            f"{'ON AIR' if on_air else 'OFF'}"
+                        )
+
+                elif cmd_name == "CDsL" and len(body) >= 2:
+                    dsk_id = body[0]
+                    on_air = body[1] == 1
+                    if dsk_id < len(downstream_keyers):
+                        downstream_keyers[dsk_id] = on_air
+                        response_payload = state_dsk(dsk_id, on_air)
+                        print(
+                            f"[{stamp()}] DSK {dsk_id + 1} -> "
+                            f"{'ON AIR' if on_air else 'OFF'}"
+                        )
+
+                elif cmd_name == "DDsA" and len(body) >= 2:
+                    # Protocol v8+: byte 1 is the DSK id.
+                    dsk_id = body[1]
+                    if dsk_id < len(downstream_keyers):
+                        downstream_keyers[dsk_id] = not downstream_keyers[dsk_id]
+                        response_payload = state_dsk(
+                            dsk_id,
+                            downstream_keyers[dsk_id],
+                        )
+                        print(
+                            f"[{stamp()}] DSK {dsk_id + 1} AUTO -> "
+                            f"{'ON AIR' if downstream_keyers[dsk_id] else 'OFF'}"
+                        )
+
+                elif cmd_name == "CAuS" and len(body) >= 4:
+                    aux_bus = body[1]
+                    source = struct.unpack("!H", body[2:4])[0]
+                    if aux_bus < len(aux_sources):
+                        aux_sources[aux_bus] = source
+                        response_payload = state_aux(aux_bus, source)
+                        print(
+                            f"[{stamp()}] AUX {aux_bus + 1} -> input {source}"
+                        )
+
+                elif cmd_name == "CTTp" and len(body) >= 4:
+                    flags = body[0]
+                    me = body[1]
+                    if me == 0:
+                        if flags & 0x01:
+                            transition_style = body[2]
+                        if flags & 0x02:
+                            transition_selection = body[3]
+                        response_payload = state_transition(
+                            transition_style,
+                            transition_selection,
+                        )
+                        print(
+                            f"[{stamp()}] TRANSITION -> style "
+                            f"{transition_style}, selection "
+                            f"0x{transition_selection:02x}"
                         )
 
                 if response_payload:
