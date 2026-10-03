@@ -221,6 +221,47 @@ def initial_state(profile=None):
     state.append(command("InCm", b"\x01\x00\x00\x00", reserved=0x0000))
     return state
 
+def bootstrap_configuration(profile):
+    """Extract editable configuration state from the captured startup stream."""
+    inputs = {}
+    multiviewers = {}
+    aux_sources = {}
+    video_mode = None
+
+    for payload in initial_state(profile):
+        for name, body in parse_commands(payload):
+            if name == "InPr" and len(body) >= 36:
+                input_id = struct.unpack("!H", body[0:2])[0]
+                inputs[input_id] = bytearray(body)
+            elif name == "MvIn" and len(body) >= 6:
+                mv_id = body[0]
+                window = body[1]
+                multiviewers.setdefault(mv_id, {})[window] = bytearray(body)
+            elif name == "AuxS" and len(body) >= 4:
+                aux_sources[body[0]] = struct.unpack("!H", body[2:4])[0]
+            elif name == "VidM" and len(body) >= 1:
+                video_mode = body[0]
+
+    return {
+        "inputs": inputs,
+        "multiviewers": multiviewers,
+        "aux_sources": aux_sources,
+        "video_mode": video_mode,
+    }
+
+
+def state_input_properties(raw_body):
+    return command("InPr", bytes(raw_body))
+
+
+def state_multiview_source(raw_body):
+    return command("MvIn", bytes(raw_body))
+
+
+def state_video_mode(mode):
+    return command("VidM", struct.pack("!B3x", mode))
+
+
 def bootstrap_mix_effects(profile):
     """Derive M/E topology and initial bus state from the startup stream."""
     result = {}
@@ -344,8 +385,12 @@ def main():
 
     # Shared switcher state, derived from the selected model's startup capture.
     mix_effects = bootstrap_mix_effects(profile)
+    config_state = bootstrap_configuration(profile)
     downstream_keyers = [False, False]
-    aux_sources = [1, 1]
+    aux_sources = config_state["aux_sources"]
+    input_properties = config_state["inputs"]
+    multiviewers = config_state["multiviewers"]
+    video_mode = config_state["video_mode"]
     auto_transitions = {}
 
     print(
@@ -640,12 +685,56 @@ def main():
                 elif cmd_name == "CAuS" and len(body) >= 4:
                     aux_bus = body[1]
                     source = struct.unpack("!H", body[2:4])[0]
-                    if aux_bus < len(aux_sources):
+                    if aux_bus in aux_sources or not aux_sources:
                         aux_sources[aux_bus] = source
                         response_payload = state_aux(aux_bus, source)
                         print(
                             f"[{stamp()}] AUX {aux_bus + 1} -> input {source}"
                         )
+
+                elif cmd_name == "CInL" and len(body) >= 32:
+                    flags = body[0]
+                    input_id = struct.unpack("!H", body[2:4])[0]
+                    raw = input_properties.get(input_id)
+                    if raw is not None and len(raw) >= 36:
+                        if flags & 0x01:
+                            raw[2:22] = body[4:24]
+                        if flags & 0x02:
+                            raw[22:26] = body[24:28]
+                        if flags & 0x04:
+                            raw[30:32] = body[28:30]
+
+                        response_payload = state_input_properties(raw)
+                        long_name = bytes(raw[2:22]).split(b"\x00", 1)[0].decode(
+                            "utf-8", errors="replace"
+                        )
+                        short_name = bytes(raw[22:26]).split(b"\x00", 1)[0].decode(
+                            "utf-8", errors="replace"
+                        )
+                        print(
+                            f"[{stamp()}] INPUT {input_id} -> "
+                            f"'{long_name}' / '{short_name}'"
+                        )
+
+                elif cmd_name == "CMvI" and len(body) >= 4:
+                    mv_id = body[0]
+                    window = body[1]
+                    source = struct.unpack("!H", body[2:4])[0]
+                    raw = multiviewers.get(mv_id, {}).get(window)
+                    if raw is not None and len(raw) >= 6:
+                        raw[0] = mv_id
+                        raw[1] = window
+                        raw[2:4] = body[2:4]
+                        response_payload = state_multiview_source(raw)
+                        print(
+                            f"[{stamp()}] MULTIVIEW {mv_id + 1} "
+                            f"WINDOW {window + 1} -> input {source}"
+                        )
+
+                elif cmd_name == "CVdM" and len(body) >= 1:
+                    video_mode = body[0]
+                    response_payload = state_video_mode(video_mode)
+                    print(f"[{stamp()}] VIDEO MODE -> {video_mode}")
 
                 elif cmd_name == "CTTp" and len(body) >= 4:
                     flags = body[0]
