@@ -1254,6 +1254,176 @@ def main():
                             f"narrow={chroma['narrow']}"
                         )
 
+                elif cmd_name == "CKPt" and len(body) >= 15:
+                    flags = body[0]
+                    me = body[1]
+                    keyer_id = body[2]
+                    if me in mix_effects and keyer_id in mix_effects[me]["key_states"]:
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        p = key["pattern"]
+                        if flags & (1 << 0):
+                            p["style"] = body[3]
+                        if flags & (1 << 1):
+                            p["size"] = struct.unpack("!H", body[4:6])[0]
+                        if flags & (1 << 2):
+                            p["symmetry"] = struct.unpack("!H", body[6:8])[0]
+                        if flags & (1 << 3):
+                            p["softness"] = struct.unpack("!H", body[8:10])[0]
+                        if flags & (1 << 4):
+                            p["position_x"] = struct.unpack("!H", body[10:12])[0]
+                        if flags & (1 << 5):
+                            p["position_y"] = struct.unpack("!H", body[12:14])[0]
+                        if flags & (1 << 6):
+                            p["invert"] = body[14] == 1
+                        response_payload = state_usk_pattern(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} PATTERN -> "
+                            f"style={p['style']} size={p['size']} sym={p['symmetry']} "
+                            f"soft={p['softness']} x={p['position_x']} y={p['position_y']} "
+                            f"invert={p['invert']}"
+                        )
+
+                elif cmd_name == "CKDV" and len(body) >= 61:
+                    flags = struct.unpack("!I", body[0:4])[0]
+                    me = body[4]
+                    keyer_id = body[5]
+                    if me in mix_effects and keyer_id in mix_effects[me]["key_states"]:
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        d = key["dve"]
+                        fields = [
+                            (0, "size_x", "!I", 8, 12), (1, "size_y", "!I", 12, 16),
+                            (2, "position_x", "!i", 16, 20), (3, "position_y", "!i", 20, 24),
+                            (4, "rotation", "!i", 24, 28)
+                        ]
+                        for bit, name, fmt, a, b in fields:
+                            if flags & (1 << bit):
+                                d[name] = struct.unpack(fmt, body[a:b])[0]
+                        if flags & (1 << 5): d["border_enabled"] = body[28] == 1
+                        if flags & (1 << 6): d["shadow_enabled"] = body[29] == 1
+                        if flags & (1 << 7): d["border_bevel"] = body[30]
+                        if flags & (1 << 8): d["border_outer_width"] = struct.unpack("!H", body[32:34])[0]
+                        if flags & (1 << 9): d["border_inner_width"] = struct.unpack("!H", body[34:36])[0]
+                        if flags & (1 << 10): d["border_outer_softness"] = body[36]
+                        if flags & (1 << 11): d["border_inner_softness"] = body[37]
+                        if flags & (1 << 12): d["border_bevel_softness"] = body[38]
+                        if flags & (1 << 13): d["border_bevel_position"] = body[39]
+                        if flags & (1 << 14): d["border_opacity"] = body[40]
+                        if flags & (1 << 15): d["border_hue"] = struct.unpack("!H", body[42:44])[0]
+                        if flags & (1 << 16): d["border_saturation"] = struct.unpack("!H", body[44:46])[0]
+                        if flags & (1 << 17): d["border_luma"] = struct.unpack("!H", body[46:48])[0]
+                        if flags & (1 << 18): d["light_direction"] = struct.unpack("!H", body[48:50])[0]
+                        if flags & (1 << 19): d["light_altitude"] = body[50]
+                        if flags & (1 << 20): d["mask_enabled"] = body[51] == 1
+                        if flags & (1 << 21): d["mask_top"] = struct.unpack("!H", body[52:54])[0]
+                        if flags & (1 << 22): d["mask_bottom"] = struct.unpack("!H", body[54:56])[0]
+                        if flags & (1 << 23): d["mask_left"] = struct.unpack("!H", body[56:58])[0]
+                        if flags & (1 << 24): d["mask_right"] = struct.unpack("!H", body[58:60])[0]
+                        if flags & (1 << 25): d["rate"] = body[60]
+                        response_payload = state_usk_dve(me, keyer_id, key)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} DVE -> "
+                            f"size={d['size_x']}x{d['size_y']} "
+                            f"pos={d['position_x']},{d['position_y']} rot={d['rotation']}"
+                        )
+
+                elif cmd_name == "CKFP" and len(body) >= 56:
+                    flags = struct.unpack("!I", body[0:4])[0]
+                    me = body[4]
+                    keyer_id = body[5]
+                    frame_id = body[6]
+                    if me in mix_effects and keyer_id in mix_effects[me]["key_states"] and frame_id in (1, 2):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        fly = key["fly"]
+                        kf = fly["keyframes"].setdefault(
+                            frame_id,
+                            {
+                                "size_x": 1000, "size_y": 1000, "position_x": 0, "position_y": 0,
+                                "rotation": 0, "border_outer_width": 0, "border_inner_width": 0,
+                                "border_outer_softness": 0, "border_inner_softness": 0,
+                                "border_bevel_softness": 0, "border_bevel_position": 0,
+                                "border_opacity": 0, "border_hue": 0, "border_saturation": 0,
+                                "border_luma": 0, "light_direction": 0, "light_altitude": 0,
+                                "mask_top": 0, "mask_bottom": 0, "mask_left": 0, "mask_right": 0,
+                            },
+                        )
+                        mapping = [
+                            (0, "size_x", "!I", 8,12),(1,"size_y","!I",12,16),
+                            (2,"position_x","!i",16,20),(3,"position_y","!i",20,24),
+                            (4,"rotation","!i",24,28),(5,"border_outer_width","!H",28,30),
+                            (6,"border_inner_width","!H",30,32),(12,"border_hue","!H",38,40),
+                            (13,"border_saturation","!H",40,42),(14,"border_luma","!H",42,44),
+                            (15,"light_direction","!H",44,46),(17,"mask_top","!h",48,50),
+                            (18,"mask_bottom","!h",50,52),(19,"mask_left","!h",52,54),
+                            (20,"mask_right","!h",54,56)
+                        ]
+                        for bit,name,fmt,a,b in mapping:
+                            if flags & (1 << bit):
+                                kf[name]=struct.unpack(fmt,body[a:b])[0]
+                        if flags & (1 << 7): kf["border_outer_softness"]=body[32]
+                        if flags & (1 << 8): kf["border_inner_softness"]=body[33]
+                        if flags & (1 << 9): kf["border_bevel_softness"]=body[34]
+                        if flags & (1 << 10): kf["border_bevel_position"]=body[35]
+                        if flags & (1 << 11): kf["border_opacity"]=body[36]
+                        if flags & (1 << 16): kf["light_altitude"]=body[46]
+                        if frame_id == 1: fly["is_a_set"] = True
+                        if frame_id == 2: fly["is_b_set"] = True
+                        response_payload = (
+                            state_usk_keyframe(me, keyer_id, frame_id, kf)
+                            + state_usk_fly_properties(me, keyer_id, fly)
+                        )
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} "
+                            f"FLY KEYFRAME {frame_id} STORED"
+                        )
+
+                elif cmd_name == "SFKF" and len(body) >= 3:
+                    me = body[0]
+                    keyer_id = body[1]
+                    frame_id = body[2]
+                    if me in mix_effects and keyer_id in mix_effects[me]["key_states"] and frame_id in (1,2):
+                        key = mix_effects[me]["key_states"][keyer_id]
+                        fly = key["fly"]
+                        d = key["dve"]
+                        fly["keyframes"][frame_id] = {
+                            "size_x": d["size_x"], "size_y": d["size_y"],
+                            "position_x": d["position_x"], "position_y": d["position_y"],
+                            "rotation": d["rotation"],
+                            "border_outer_width": d["border_outer_width"],
+                            "border_inner_width": d["border_inner_width"],
+                            "border_outer_softness": d["border_outer_softness"],
+                            "border_inner_softness": d["border_inner_softness"],
+                            "border_bevel_softness": d["border_bevel_softness"],
+                            "border_bevel_position": d["border_bevel_position"],
+                            "border_opacity": d["border_opacity"], "border_hue": d["border_hue"],
+                            "border_saturation": d["border_saturation"], "border_luma": d["border_luma"],
+                            "light_direction": d["light_direction"], "light_altitude": d["light_altitude"],
+                            "mask_top": d["mask_top"], "mask_bottom": d["mask_bottom"],
+                            "mask_left": d["mask_left"], "mask_right": d["mask_right"],
+                        }
+                        if frame_id == 1: fly["is_a_set"] = True
+                        if frame_id == 2: fly["is_b_set"] = True
+                        response_payload = (
+                            state_usk_keyframe(me, keyer_id, frame_id, fly["keyframes"][frame_id])
+                            + state_usk_fly_properties(me, keyer_id, fly)
+                        )
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} "
+                            f"STORE FLY {'A' if frame_id == 1 else 'B'}"
+                        )
+
+                elif cmd_name == "RFlK" and len(body) >= 6:
+                    me = body[1]
+                    keyer_id = body[2]
+                    frame_id = body[4]
+                    if me in mix_effects and keyer_id in mix_effects[me]["key_states"]:
+                        fly = mix_effects[me]["key_states"][keyer_id]["fly"]
+                        fly["is_at_keyframe"] = frame_id
+                        response_payload = state_usk_fly_properties(me, keyer_id, fly)
+                        print(
+                            f"[{stamp()}] M/E {me + 1} USK {keyer_id + 1} "
+                            f"RUN TO FLY {frame_id}"
+                        )
+
                 elif cmd_name == "CKOn" and len(body) >= 3:
                     me = body[0]
                     keyer_id = body[1]
