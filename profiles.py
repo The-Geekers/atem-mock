@@ -78,6 +78,27 @@ PROFILES = {
         "bootstrap": "profiles_data/tvs-hd8-v9.0.data",
         "notes": "Captured startup state from a real ATEM Television Studio HD8.",
     },
+    "mini-extreme-iso-g2": {
+        "name": "ATEM Mini Extreme ISO G2",
+        "family": "mini",
+        "implemented": True,
+        "bootstrap": "profiles_data/mini-extreme-iso-g2-v10.1.1.data",
+        "notes": "Captured startup state from a real ATEM Mini Extreme ISO G2.",
+    },
+    "sdi-extreme-iso": {
+        "name": "ATEM SDI Extreme ISO",
+        "family": "sdi",
+        "implemented": True,
+        "bootstrap": "profiles_data/sdi-extreme-iso-v8.8.data",
+        "notes": "Captured startup state from a real ATEM SDI Extreme ISO.",
+    },
+    "tvs-4k8": {
+        "name": "ATEM Television Studio 4K8",
+        "family": "television-studio",
+        "implemented": True,
+        "bootstrap": "profiles_data/tvs-4k8-v9.3.data",
+        "notes": "Captured startup state from a real ATEM Television Studio 4K8.",
+    },
 }
 
 
