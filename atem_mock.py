@@ -16,6 +16,7 @@ import argparse
 import socket
 import struct
 from datetime import datetime
+from pathlib import Path
 
 from profiles import format_profiles, get_profile
 
@@ -93,14 +94,13 @@ def state_preview(preview_source: int):
     return command("PrvI", struct.pack("!BxH4x", 0, preview_source))
 
 
-def initial_state():
-    """Return a known working ATEM initialization stream.
+def initial_state(profile=None):
+    """Return a known working ATEM initialization stream."""
+    if profile and profile.get("bootstrap", "").endswith(".data"):
+        data_path = Path(__file__).with_name(profile["bootstrap"].split("/")[0]) / Path(profile["bootstrap"]).name
+        lines = data_path.read_text(encoding="utf-8").splitlines()
+        return [bytes.fromhex(line.strip()) for line in lines if line.strip()]
 
-    The six setup blocks below come from the public pyAtemSim reference,
-    captured from an ATEM Television Studio HD. For this milestone we use
-    them unchanged to validate compatibility with current Software Control.
-    Once accepted, they will be replaced by explicit model profiles.
-    """
     raw_blocks = [
         # pyAtemSim setup block 1
         "00 0c 00 14 5f 76 65 72 00 02 00 1e 00 34 00 04 5f 70 69 6e 41 54 45 4d 20 54 65 6c 65 76 69 73 69 6f 6e 20 53 74 75 64 69 6f 20 48 44 00 00 04 00 00 00 00 00 50 72 70 00 00 00 00 08 00 00 00 00 24 80 00 5f 74 6f 70 01 18 02 01 04 02 01 01 04 01 00 00 01 01 04 00 00 00 01 01 01 01 00 00 00 20 00 00 00 0c 64 50 5f 4d 65 43 00 01 00 01 00 0c 00 00 5f 6d 70 6c 14 00 00 20 00 14 00 00 5f 4d 76 43 0a 01 01 00 00 01 01 01 00 00 00 02 00 0c 00 00 5f 41 4d 43 0a 00 01 00 00 c2 00 00 5f 56 4d 43 00 0e 64 50 00 0b 00 80 00 00 00 80 00 00 00 00 00 01 72 70 00 00 00 00 40 00 00 00 00 00 02 00 53 50 00 00 00 80 00 00 00 00 00 03 53 50 5a 00 00 00 40 00 00 00 00 00 04 5a 43 53 00 00 00 10 00 00 00 00 00 05 43 6d 01 00 00 00 20 00 00 00 00 00 06 70 00 00 00 00 00 40 00 00 00 00 00 07 43 43 64 00 00 00 80 00 00 00 00 00 08 00 00 00 00 00 01 00 00 00 00 00 00 09 08 00 00 00 00 02 00 00 00 00 00 00 0a 01 00 01 00 00 04 40 00 00 00 00 00 0b 00 00 00 00 00 08 80 00 00 00 00 00 0c 43 64 50 00 00 14 40 00 00 00 00 00 0d 00 00 00 00 00 28 80 00 00 00 00 00 00 0c 00 20 5f 4d 41 43 64 50 06 08 00 20 00 00 5f 44 56 45 00 00 00 11 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f 22 50 06 08 00 0c 00 00 50 6f 77 72 01 00 00 50 00 0c 08 00 56 69 64 4d 0d 00 00 20 00 0c 43 43 56 33 73 6c 00 80 00 00 00 0c 00 00 54 63 4c 6b 00 70 00 00 00 2c 00 00 49 6e 50 72 00 00 42 6c 61 63 6b 00 04 80 00 00 00 02 00 00 00 00 00 50 72 70 42 4c 4b 00 01 00 01 00 01 00 01 00 13 01 00 2c 06 08 49 6e 50 72 00 01 50 50 20 4d 41 49 4e 00 08 00 00 00 00 00 00 00 00 20 0b c2 50 50 31 00 00 08 00 02 00 02 00 02 13 01 00 2c 00 50 49 6e 50 72 00 02 50 50 20 54 48 49 52 44 53 00 64 50 06 0b 00 80 00 00 00 02 50 50 32 00 00 50 00 02 00 02 00 00 13 01 00 2c 00 20 49 6e 50 72 00 03 50 50 20 53 54 41 47 45 00 00 00 00 00 50 72 70 00 00 00 00 50 50 33 00 00 20 00 02 00 02 00 50 13 01 00 2c 00 00 49 6e 50 72 00 04 43 41 4d 45 52 41 20 34 00 00 00 00 00 20 00 00 43 43 64 50 43 41 4d 34 00 01 00 02 00 02 00 00 13 01 00 2c 00 5a 49 6e 50 72 00 05 43 41 4d 45 52 41 20 31 00 01 01 01 00 01 00 00 00 00 00 00 43 41 4d 31 00 5c 00 01 00 01 00 00 13 01 00 2c 43 43 49 6e 50 72 00 06 43 41 4d 45 52 41 20 32 00 50 72 70 15 e0 00 00 00 00 00 00 43 41 4d 32 00 43 00 01 00 01 00 03 13 01 00 2c 00 01 49 6e 50 72 00 07 43 41 4d 45 52 41 20 33 00 20 00 00 43 43 64 50 07 01 08 01 43 41 4d 33 00 00 00 01 00 01 00 70 13 01 00 2c 08 00 49 6e 50 72 00 08 43 41 4d 45 52 41 20 35 00 01 00 00 00 00 00 00 00 43 73 74 43 41 4d 35 00 00 00 01 00 01 00 50 13 01 00 2c 07 08 49 6e 50 72 03 e8 43 6f 6c 6f 72 20 42 61 72 73 00 00 00 00 00 00 00 20 64 50 42 41 52 53 01 08 01 00 01 00 02 04 13 01 00 2c 00 00 49 6e 50 72 07 d1 43 6f 6c 6f 72 20 31 00 43 43 64 50 07 08 02 80 00 00 00 04 43 4f 4c 31 01 00 01 00 01 00 03 00 03 01 00 2c 00 20 49 6e 50 72 07 d2 43 6f 6c 6f 72 20 32 00 00 00 00 00 00 00 00 00 00 00 00 00 43 4f 4c 32 01 20 01 00 01 00 03 50 03 01 00 2c 00 00 49 6e 50 72 0b c2 4d 65 64 69 61 20 50 6c 61 79 65 72 20 31 00 50 43 43 64 50 4d 50 31 00 01 00 01 00 01 00 04 00 13 01 00 2c 08 00 49 6e 50 72 0b c3 4d 65 64 69 61 20 50 6c 61 79 65 72 20 31 20 4b 65 79 00 00 4d 50 31 4b 01 00 01 00 01 00 05 70 13 01 00 2c 43 43 49 6e 50 72 0b cc 4d 65 64 69 61 20 50 6c 61 79 65 72 20 32 00 00 04 00 00 00 4d 50 32 00 01 12 01 00 01 00 04 04 13 01 00 2c 01 00 49 6e 50 72 0b cd 4d 65 64 69 61 20 50 6c 61 79 65 72 20 32 20 4b 65 79 00 04 4d 50 32 4b 01 00 01 00 01 00 05 04 13 01 00 2c 01 00 49 6e 50 72 0f aa 4b 65 79 20 31 20 4d 61 73 6b 00 04 c0 12 ed 04 81 d3 00 01 4d 31 4b 31 01 00 01 00 01 00 82 00 03 00 00 2c 20 00 49 6e 50 72 13 92 44 53 4b 20 31 20 4d 61 73 6b 00 02 00 00 00 00 cc c6 0e 01 44 4b 31 4d 01 00 01 00 01 00 82 00 03 00 00 2c 00 00 49 6e 50 72 13 9c 44 53 4b 20 32 20 4d 61 73 6b 00 00 a6 7d 03 00 00 00 00 00 44 4b 32 4d 01 d3 01 00 01 00 82 00 03 00 00 2c a6 7d 49 6e 50 72 27 1a 50 72 6f 67 72 61 6d 00 bc e5 0d 01 78 0f 01 02 14 00 00 00 50 47 4d 00 01 00 01 00 01 00 80 02 03 00 00 2c 20 46 49 6e 50 72 27 1b 50 72 65 76 69 65 77 00 78 64 69 75 73 63 66 58 44 49 55 53 50 56 57 00 01 78 01 00 01 00 80 01 03 00 00 2c 08 08 49 6e 50 72 1b 59 43 6c 65 61 6e 20 46 65 65 64 20 31 00 00 00 00 44 f9 00 02 43 46 44 31 01 7e 01 00 01 00 80 02 03 00",
@@ -278,7 +278,7 @@ def main():
         # Each newly connected controller receives a full ATEM initialization
         # stream followed by the current shared Program/Preview state.
         if not client.state_sent:
-            for payload in initial_state():
+            for payload in initial_state(profile):
                 send_state_packet(sock, client, payload)
 
             send_state_packet(sock, client, state_program(program_source))
