@@ -1309,6 +1309,17 @@ def main():
             for cmd_name, body in parse_commands(p["payload"]):
                 response_payload = None
 
+                if cmd_name in {
+                    "LOCK", "LKST", "LKOB",
+                    "FTSD", "FTFD", "FTDa", "FTUA", "FTCD", "FTDC", "FTDE",
+                    "MPSS", "MPCE", "SCPS", "RCPS", "SMPC", "MPCS",
+                    "CMPS", "MPSp",
+                }:
+                    print(
+                        f"[{stamp()}] MEDIA RX {cmd_name} "
+                        f"len={len(body)} body={body.hex()}"
+                    )
+
                 if cmd_name == "CPgI" and len(body) >= 4:
                     me, source = struct.unpack("!BxH", body[:4])
                     if me in mix_effects:
