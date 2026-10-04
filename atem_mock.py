@@ -2083,11 +2083,10 @@ def main():
                         )
                     else:
                         media_locks.discard(lock_index)
-                        send_state_packet(
-                            sock,
-                            client,
-                            state_lock(lock_index, False),
-                        )
+                        # Capture-backed ATEM fixtures do not reply to an
+                        # explicit unlock request. Treat it as local state only.
+                        # Software Control commonly sends LOCK=0 as cleanup
+                        # before beginning a fresh upload negotiation.
                     print(
                         f"[{stamp()}] MEDIA LOCK {lock_index} -> "
                         f"{'ON' if locked else 'OFF'}"
