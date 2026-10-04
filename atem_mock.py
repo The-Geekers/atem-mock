@@ -621,8 +621,9 @@ def state_lock(index, locked):
 
 
 def state_lock_obtained(index):
-    # LKOB carries only the 16-bit lock/store index.
-    return command("LKOB", struct.pack("!H", index))
+    # ATEM command blocks are 32-bit aligned. LKOB only uses the first
+    # 16 bits for the store index, but the response body is padded to 4 bytes.
+    return command("LKOB", struct.pack("!H2x", index))
 
 
 def state_media_frame(pool_id, frame_index, file_hash, file_name):
