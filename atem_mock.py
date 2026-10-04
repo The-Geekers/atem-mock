@@ -617,7 +617,8 @@ def state_transfer_complete(transfer_id):
 
 
 def state_lock(index, locked):
-    return command("LKST", struct.pack("!HBx", index, 1 if locked else 0))
+    # Real Constellation captures use 0xff in the reserved byte.
+    return command("LKST", struct.pack("!HBB", index, 1 if locked else 0, 0xFF))
 
 
 def state_lock_obtained(index):
@@ -1964,19 +1965,17 @@ def main():
                     locked = body[2] > 0
                     if locked:
                         media_locks.add(lock_index)
-                        # Match ATEM lock negotiation more closely: first
-                        # publish the lock state, then grant it in a separate
-                        # command packet. Software Control waits for LKOB
-                        # before it starts FTSD.
-                        send_state_packet(
-                            sock,
-                            client,
-                            state_lock(lock_index, True),
-                        )
+                        # Real ATEM/emulator behavior: grant ownership first,
+                        # then publish the global lock state.
                         send_state_packet(
                             sock,
                             client,
                             state_lock_obtained(lock_index),
+                        )
+                        send_state_packet(
+                            sock,
+                            client,
+                            state_lock(lock_index, True),
                         )
                     else:
                         media_locks.discard(lock_index)
