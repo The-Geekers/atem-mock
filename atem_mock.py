@@ -440,6 +440,9 @@ def bootstrap_configuration(profile):
     fairlight_source_expanders = {}
     media_players = {}
     media_clips = {}
+    media_player_count = 0
+    media_still_count = 0
+    media_clip_count = 0
 
     for payload in initial_state(profile):
         for name, body in parse_commands(payload):
@@ -494,6 +497,11 @@ def bootstrap_configuration(profile):
                 aux_sources[body[0]] = struct.unpack("!H", body[2:4])[0]
             elif name == "VidM" and len(body) >= 1:
                 video_mode = body[0]
+            elif name == "_top" and len(body) >= 6:
+                media_player_count = body[5]
+            elif name == "_mpl" and len(body) >= 2:
+                media_still_count = body[0]
+                media_clip_count = body[1]
             elif name == "FAMP" and len(body) >= 20:
                 fairlight_master = bytearray(body)
             elif name == "FASP" and len(body) >= 52:
@@ -553,6 +561,9 @@ def bootstrap_configuration(profile):
         "fairlight_source_expanders": fairlight_source_expanders,
         "media_players": media_players,
         "media_clips": media_clips,
+        "media_player_count": media_player_count,
+        "media_still_count": media_still_count,
+        "media_clip_count": media_clip_count,
     }
 
 
@@ -639,6 +650,37 @@ def state_media_frame(pool_id, frame_index, file_hash, file_name):
     while len(body) % 4:
         body.append(0)
     return command("MPfe", bytes(body))
+
+
+def state_media_empty_still(frame_index):
+    body = bytearray(24)
+    body[0] = 0
+    struct.pack_into("!H", body, 2, frame_index)
+    body[4] = 0
+    body[23] = 0
+    return command("MPfe", bytes(body))
+
+
+def state_media_empty_clip(clip_index):
+    body = bytearray(68)
+    body[0] = clip_index
+    body[1] = 0
+    struct.pack_into("!H", body, 66, 0)
+    return command("MPCS", bytes(body))
+
+
+def state_media_player_clean(player_id):
+    # Default each player to an empty still slot. This avoids inheriting
+    # assignments captured from the physical switcher fixture.
+    source = command(
+        "MPCE",
+        struct.pack("!BBBB", player_id, 1, 0, 0),
+    )
+    status = command(
+        "RCPS",
+        struct.pack("!BBBBH2x", player_id, 0, 0, 1, 0),
+    )
+    return source + status
 
 
 def rle_decoded_size(data):
@@ -1003,6 +1045,25 @@ def main():
     fairlight_source_expanders = config_state["fairlight_source_expanders"]
     media_players = config_state["media_players"]
     media_clips = config_state["media_clips"]
+    media_player_count = config_state["media_player_count"]
+    media_still_count = config_state["media_still_count"]
+    media_clip_count = config_state["media_clip_count"]
+
+    # Do not inherit stale Media Pool contents/player assignments from the
+    # captured hardware fixture. The mock starts with an intentionally empty
+    # media pool and neutral player state.
+    media_players = {
+        player_id: {
+            "source": bytearray([player_id, 1, 0, 0]),
+            "status": bytearray([player_id, 0, 0, 1, 0, 0]),
+        }
+        for player_id in range(media_player_count)
+    }
+    media_clips = {
+        clip_id: bytearray([clip_id, 0]) + bytearray(66)
+        for clip_id in range(media_clip_count)
+    }
+
     media_transfers = {}
     media_locks = set()
     auto_transitions = {}
@@ -1196,6 +1257,30 @@ def main():
         if not client.state_sent:
             for payload in initial_state(profile):
                 send_state_packet(sock, client, payload)
+
+            # The startup fixture contains Media Pool metadata from the real
+            # switcher capture. Override it immediately with a clean mock state.
+            clean_media = bytearray()
+            for still_id in range(media_still_count):
+                clean_media += state_media_empty_still(still_id)
+            for clip_id in range(media_clip_count):
+                clean_media += state_media_empty_clip(clip_id)
+            for player_id in range(media_player_count):
+                clean_media += state_media_player_clean(player_id)
+
+            # Keep UDP payloads comfortably below MTU while preserving command
+            # boundaries.
+            offset = 0
+            while offset < len(clean_media):
+                packet = bytearray()
+                while offset + 8 <= len(clean_media):
+                    cmd_len = struct.unpack_from("!H", clean_media, offset)[0]
+                    if packet and len(packet) + cmd_len > 1200:
+                        break
+                    packet += clean_media[offset:offset + cmd_len]
+                    offset += cmd_len
+                if packet:
+                    send_state_packet(sock, client, bytes(packet))
 
             for me, state in mix_effects.items():
                 send_state_packet(sock, client, state_program(state["program"], me))
