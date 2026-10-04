@@ -621,7 +621,8 @@ def state_lock(index, locked):
 
 
 def state_lock_obtained(index):
-    return command("LKOB", struct.pack("!H2x", index))
+    # LKOB carries only the 16-bit lock/store index.
+    return command("LKOB", struct.pack("!H", index))
 
 
 def state_media_frame(pool_id, frame_index, file_hash, file_name):
@@ -1962,11 +1963,27 @@ def main():
                     locked = body[2] > 0
                     if locked:
                         media_locks.add(lock_index)
-                        direct = state_lock(lock_index, True) + state_lock_obtained(lock_index)
+                        # Match ATEM lock negotiation more closely: first
+                        # publish the lock state, then grant it in a separate
+                        # command packet. Software Control waits for LKOB
+                        # before it starts FTSD.
+                        send_state_packet(
+                            sock,
+                            client,
+                            state_lock(lock_index, True),
+                        )
+                        send_state_packet(
+                            sock,
+                            client,
+                            state_lock_obtained(lock_index),
+                        )
                     else:
                         media_locks.discard(lock_index)
-                        direct = state_lock(lock_index, False)
-                    send_state_packet(sock, client, direct)
+                        send_state_packet(
+                            sock,
+                            client,
+                            state_lock(lock_index, False),
+                        )
                     print(
                         f"[{stamp()}] MEDIA LOCK {lock_index} -> "
                         f"{'ON' if locked else 'OFF'}"
