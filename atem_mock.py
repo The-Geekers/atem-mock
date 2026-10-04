@@ -605,6 +605,59 @@ def state_media_clip(raw_body):
     return command("MPCS", bytes(raw_body))
 
 
+def state_transfer_continue(transfer_id, chunk_size=1024, chunk_count=4):
+    return command(
+        "FTCD",
+        struct.pack("!H4xHH2x", transfer_id, chunk_size, chunk_count),
+    )
+
+
+def state_transfer_complete(transfer_id):
+    return command("FTDC", struct.pack("!H2x", transfer_id))
+
+
+def state_lock(index, locked):
+    return command("LKST", struct.pack("!HBx", index, 1 if locked else 0))
+
+
+def state_lock_obtained(index):
+    return command("LKOB", struct.pack("!H2x", index))
+
+
+def state_media_frame(pool_id, frame_index, file_hash, file_name):
+    name = file_name.encode("utf-8", errors="replace")[:255]
+    body = bytearray(24 + len(name))
+    body[0] = pool_id
+    struct.pack_into("!H", body, 2, frame_index)
+    body[4] = 1
+    body[5:21] = (file_hash or b"\x00" * 16)[:16].ljust(16, b"\x00")
+    body[23] = len(name)
+    body[24:24 + len(name)] = name
+    while len(body) % 4:
+        body.append(0)
+    return command("MPfe", bytes(body))
+
+
+def rle_decoded_size(data):
+    """Return decoded byte count for complete 8-byte ATEM RLE blocks."""
+    header = 0xFEFEFEFEFEFEFEFE
+    offset = 0
+    decoded = 0
+    total = len(data)
+    while offset + 8 <= total:
+        block = struct.unpack_from("!Q", data, offset)[0]
+        if block == header:
+            if offset + 24 > total:
+                break
+            repeat = struct.unpack_from("!Q", data, offset + 8)[0]
+            decoded += repeat * 8
+            offset += 24
+        else:
+            decoded += 8
+            offset += 8
+    return decoded
+
+
 def bootstrap_mix_effects(profile):
     """Derive M/E topology and initial bus state from the startup stream."""
     result = {}
@@ -947,6 +1000,8 @@ def main():
     fairlight_source_expanders = config_state["fairlight_source_expanders"]
     media_players = config_state["media_players"]
     media_clips = config_state["media_clips"]
+    media_transfers = {}
+    media_locks = set()
     auto_transitions = {}
 
     print(
@@ -1901,6 +1956,115 @@ def main():
                             f"[{stamp()}] FAIRLIGHT INPUT {index} EXPANDER -> "
                             f"on={raw[16] > 0} gate={raw[17] > 0}"
                         )
+
+                elif cmd_name == "LOCK" and len(body) >= 3:
+                    lock_index = struct.unpack("!H", body[0:2])[0]
+                    locked = body[2] > 0
+                    if locked:
+                        media_locks.add(lock_index)
+                        direct = state_lock(lock_index, True) + state_lock_obtained(lock_index)
+                    else:
+                        media_locks.discard(lock_index)
+                        direct = state_lock(lock_index, False)
+                    send_state_packet(sock, client, direct)
+                    print(
+                        f"[{stamp()}] MEDIA LOCK {lock_index} -> "
+                        f"{'ON' if locked else 'OFF'}"
+                    )
+
+                elif cmd_name == "FTSD" and len(body) >= 14:
+                    transfer_id = struct.unpack("!H", body[0:2])[0]
+                    store_id = struct.unpack("!H", body[2:4])[0]
+                    transfer_index = struct.unpack("!H", body[6:8])[0]
+                    expected_size = struct.unpack("!I", body[8:12])[0]
+                    mode = struct.unpack("!H", body[12:14])[0]
+                    media_transfers[transfer_id] = {
+                        "store_id": store_id,
+                        "index": transfer_index,
+                        "expected_size": expected_size,
+                        "mode": mode,
+                        "data": bytearray(),
+                        "name": "",
+                        "description": "",
+                        "hash": b"\x00" * 16,
+                        "chunk_size": 1024,
+                        "chunks_outstanding": 4,
+                    }
+                    send_state_packet(
+                        sock,
+                        client,
+                        state_transfer_continue(transfer_id, 1024, 4),
+                    )
+                    print(
+                        f"[{stamp()}] MEDIA TRANSFER {transfer_id} START -> "
+                        f"store={store_id} index={transfer_index} "
+                        f"size={expected_size} mode={mode}"
+                    )
+
+                elif cmd_name == "FTFD" and len(body) >= 210:
+                    transfer_id = struct.unpack("!H", body[0:2])[0]
+                    transfer = media_transfers.get(transfer_id)
+                    if transfer is not None:
+                        transfer["name"] = bytes(body[2:66]).split(
+                            b"\x00", 1
+                        )[0].decode("utf-8", errors="replace")
+                        transfer["description"] = bytes(body[66:194]).split(
+                            b"\x00", 1
+                        )[0].decode("utf-8", errors="replace")
+                        transfer["hash"] = bytes(body[194:210])
+                        print(
+                            f"[{stamp()}] MEDIA TRANSFER {transfer_id} DESC -> "
+                            f"'{transfer['name']}'"
+                        )
+
+                elif cmd_name == "FTDa" and len(body) >= 4:
+                    transfer_id = struct.unpack("!H", body[0:2])[0]
+                    chunk_len = struct.unpack("!H", body[2:4])[0]
+                    transfer = media_transfers.get(transfer_id)
+                    if transfer is not None:
+                        chunk = body[4:4 + chunk_len]
+                        transfer["data"].extend(chunk)
+                        transfer["chunks_outstanding"] = max(
+                            0, transfer["chunks_outstanding"] - 1
+                        )
+                        decoded_size = rle_decoded_size(transfer["data"])
+
+                        if decoded_size >= transfer["expected_size"]:
+                            send_state_packet(
+                                sock,
+                                client,
+                                state_transfer_complete(transfer_id),
+                            )
+                            pool_id = transfer["store_id"]
+                            frame_index = transfer["index"]
+                            if pool_id <= 2:
+                                broadcast_state(
+                                    sock,
+                                    clients,
+                                    state_media_frame(
+                                        pool_id,
+                                        frame_index,
+                                        transfer["hash"],
+                                        transfer["name"],
+                                    ),
+                                )
+                            print(
+                                f"[{stamp()}] MEDIA TRANSFER {transfer_id} COMPLETE -> "
+                                f"store={pool_id} index={frame_index} "
+                                f"decoded={decoded_size}"
+                            )
+                            del media_transfers[transfer_id]
+                        elif transfer["chunks_outstanding"] == 0:
+                            transfer["chunks_outstanding"] = 4
+                            send_state_packet(
+                                sock,
+                                client,
+                                state_transfer_continue(
+                                    transfer_id,
+                                    transfer["chunk_size"],
+                                    4,
+                                ),
+                            )
 
                 elif cmd_name == "MPSS" and len(body) >= 5:
                     flags = body[0]
