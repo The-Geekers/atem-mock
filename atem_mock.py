@@ -1255,11 +1255,22 @@ def main():
         # Each newly connected controller receives a full ATEM initialization
         # stream followed by the current live state of every M/E.
         if not client.state_sent:
+            # Keep the real device capabilities/topology from the fixture,
+            # but never expose captured Media Pool/player contents to clients.
+            # Sending stale MPfe/MPCS/MPCE/RCPS first and clearing them later
+            # can leave Software Control's transfer manager initialized against
+            # the captured hardware state.
+            captured_media_commands = {"MPfe", "MPCS", "MPCE", "RCPS"}
             for payload in initial_state(profile):
-                send_state_packet(sock, client, payload)
+                filtered = bytearray()
+                for name, body in parse_commands(payload):
+                    if name not in captured_media_commands:
+                        filtered += command(name, body)
+                if filtered:
+                    send_state_packet(sock, client, bytes(filtered))
 
-            # The startup fixture contains Media Pool metadata from the real
-            # switcher capture. Override it immediately with a clean mock state.
+            # Send the mock-owned empty Media Pool as the only initial media
+            # state Software Control ever sees.
             clean_media = bytearray()
             for still_id in range(media_still_count):
                 clean_media += state_media_empty_still(still_id)
