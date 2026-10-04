@@ -627,9 +627,13 @@ def state_transfer_complete(transfer_id):
     return command("FTDC", struct.pack("!H2x", transfer_id))
 
 
-def state_lock(index, locked):
-    # Real Constellation captures use 0xff in the reserved byte.
-    return command("LKST", struct.pack("!HBB", index, 1 if locked else 0, 0xFF))
+def state_lock(index, locked, last_still=0xFF):
+    # LKST byte 3 is not padding: captures show it tracks the last still
+    # transferred. 0xff represents "none yet / cleared pool".
+    return command(
+        "LKST",
+        struct.pack("!HBB", index, 1 if locked else 0, last_still & 0xFF),
+    )
 
 
 def state_lock_obtained(index):
@@ -1065,7 +1069,10 @@ def main():
     }
 
     media_transfers = {}
-    media_locks = set()
+    media_locks = {
+        lock_id: {"locked": False, "last_still": 0xFF}
+        for lock_id in range(max(3, media_clip_count + 1))
+    }
     auto_transitions = {}
 
     print(
@@ -1278,6 +1285,12 @@ def main():
                 clean_media += state_media_empty_clip(clip_id)
             for player_id in range(media_player_count):
                 clean_media += state_media_player_clean(player_id)
+            for lock_id, lock_state in media_locks.items():
+                clean_media += state_lock(
+                    lock_id,
+                    lock_state["locked"],
+                    lock_state["last_still"],
+                )
 
             # Keep UDP payloads comfortably below MTU while preserving command
             # boundaries.
@@ -2070,26 +2083,45 @@ def main():
                 elif cmd_name == "LOCK" and len(body) >= 3:
                     lock_index = struct.unpack("!H", body[0:2])[0]
                     locked = body[2] > 0
+                    lock_state = media_locks.setdefault(
+                        lock_index,
+                        {"locked": False, "last_still": 0xFF},
+                    )
+                    lock_state["locked"] = locked
+
                     if locked:
-                        media_locks.add(lock_index)
-                        # Capture-backed ATEM emulators show the upload flow as
-                        # LOCK -> LKOB -> FTSD. Do not emit LKST here: Software
-                        # Control waits for the ownership grant before starting
-                        # the transfer.
+                        # Capture-backed emulators and real-device traces use
+                        # LKOB to grant ownership, followed by LKST reflecting
+                        # the new global lock state.
                         send_state_packet(
                             sock,
                             client,
                             state_lock_obtained(lock_index),
                         )
+                        send_state_packet(
+                            sock,
+                            client,
+                            state_lock(
+                                lock_index,
+                                True,
+                                lock_state["last_still"],
+                            ),
+                        )
                     else:
-                        media_locks.discard(lock_index)
-                        # Capture-backed ATEM fixtures do not reply to an
-                        # explicit unlock request. Treat it as local state only.
-                        # Software Control commonly sends LOCK=0 as cleanup
-                        # before beginning a fresh upload negotiation.
+                        send_state_packet(
+                            sock,
+                            client,
+                            state_lock(
+                                lock_index,
+                                False,
+                                lock_state["last_still"],
+                            ),
+                        )
+
                     print(
                         f"[{stamp()}] MEDIA LOCK {lock_index} -> "
-                        f"{'ON' if locked else 'OFF'}"
+                        f"{'ON' if locked else 'OFF'} "
+                        f"last={lock_state['last_still']}"
                     )
 
                 elif cmd_name == "FTSD" and len(body) >= 14:
@@ -2157,6 +2189,11 @@ def main():
                             )
                             pool_id = transfer["store_id"]
                             frame_index = transfer["index"]
+                            if pool_id == 0:
+                                media_locks.setdefault(
+                                    0,
+                                    {"locked": True, "last_still": 0xFF},
+                                )["last_still"] = frame_index & 0xFF
                             if pool_id <= 2:
                                 broadcast_state(
                                     sock,
