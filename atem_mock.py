@@ -438,6 +438,8 @@ def bootstrap_configuration(profile):
     fairlight_source_compressors = {}
     fairlight_source_limiters = {}
     fairlight_source_expanders = {}
+    media_players = {}
+    media_clips = {}
 
     for payload in initial_state(profile):
         for name, body in parse_commands(payload):
@@ -521,6 +523,15 @@ def bootstrap_configuration(profile):
                 index = struct.unpack("!H", body[0:2])[0]
                 source = struct.unpack("!q", body[8:16])[0]
                 fairlight_source_expanders[(index, source)] = bytearray(body)
+            elif name == "MPCE" and len(body) >= 4:
+                player_id = body[0]
+                media_players.setdefault(player_id, {})["source"] = bytearray(body)
+            elif name == "RCPS" and len(body) >= 6:
+                player_id = body[0]
+                media_players.setdefault(player_id, {})["status"] = bytearray(body)
+            elif name == "MPCS" and len(body) >= 68:
+                clip_id = body[0]
+                media_clips[clip_id] = bytearray(body)
 
     return {
         "inputs": inputs,
@@ -540,6 +551,8 @@ def bootstrap_configuration(profile):
         "fairlight_source_compressors": fairlight_source_compressors,
         "fairlight_source_limiters": fairlight_source_limiters,
         "fairlight_source_expanders": fairlight_source_expanders,
+        "media_players": media_players,
+        "media_clips": media_clips,
     }
 
 
@@ -578,6 +591,18 @@ def state_fairlight_source(raw_body):
 
 def state_fairlight_raw(name, raw_body):
     return command(name, bytes(raw_body))
+
+
+def state_media_player_source(raw_body):
+    return command("MPCE", bytes(raw_body))
+
+
+def state_media_player_status(raw_body):
+    return command("RCPS", bytes(raw_body))
+
+
+def state_media_clip(raw_body):
+    return command("MPCS", bytes(raw_body))
 
 
 def bootstrap_mix_effects(profile):
@@ -920,6 +945,8 @@ def main():
     fairlight_source_compressors = config_state["fairlight_source_compressors"]
     fairlight_source_limiters = config_state["fairlight_source_limiters"]
     fairlight_source_expanders = config_state["fairlight_source_expanders"]
+    media_players = config_state["media_players"]
+    media_clips = config_state["media_clips"]
     auto_transitions = {}
 
     print(
@@ -1874,6 +1901,84 @@ def main():
                             f"[{stamp()}] FAIRLIGHT INPUT {index} EXPANDER -> "
                             f"on={raw[16] > 0} gate={raw[17] > 0}"
                         )
+
+                elif cmd_name == "MPSS" and len(body) >= 5:
+                    flags = body[0]
+                    player_id = body[1]
+                    player = media_players.setdefault(
+                        player_id,
+                        {
+                            "source": bytearray(
+                                [player_id, 1, 0, 0]
+                            ),
+                            "status": bytearray(
+                                [player_id, 0, 0, 1, 0, 0]
+                            ),
+                        },
+                    )
+                    raw = player["source"]
+                    if flags & (1 << 0):
+                        raw[1] = body[2]
+                    if flags & (1 << 1):
+                        raw[2] = body[3]
+                    if flags & (1 << 2):
+                        raw[3] = body[4]
+                    response_payload = state_media_player_source(raw)
+                    print(
+                        f"[{stamp()}] MEDIA PLAYER {player_id + 1} SOURCE -> "
+                        f"type={raw[1]} still={raw[2]} clip={raw[3]}"
+                    )
+
+                elif cmd_name == "SCPS" and len(body) >= 8:
+                    flags = body[0]
+                    player_id = body[1]
+                    player = media_players.setdefault(
+                        player_id,
+                        {
+                            "source": bytearray(
+                                [player_id, 1, 0, 0]
+                            ),
+                            "status": bytearray(
+                                [player_id, 0, 0, 1, 0, 0]
+                            ),
+                        },
+                    )
+                    raw = player["status"]
+                    if flags & (1 << 0):
+                        raw[1] = body[2]
+                    if flags & (1 << 1):
+                        raw[2] = body[3]
+                    if flags & (1 << 2):
+                        raw[3] = body[4]
+                    if flags & (1 << 3):
+                        raw[4:6] = body[6:8]
+                    response_payload = state_media_player_status(raw)
+                    print(
+                        f"[{stamp()}] MEDIA PLAYER {player_id + 1} STATUS -> "
+                        f"play={raw[1] > 0} loop={raw[2] > 0} "
+                        f"begin={raw[3] > 0} frame="
+                        f"{struct.unpack('!H', raw[4:6])[0]}"
+                    )
+
+                elif cmd_name == "SMPC" and len(body) >= 68:
+                    clip_id = body[1]
+                    raw = media_clips.setdefault(
+                        clip_id,
+                        bytearray(68),
+                    )
+                    raw[0] = clip_id
+                    raw[1] = 1
+                    raw[2:66] = body[2:66]
+                    raw[66:68] = body[66:68]
+                    response_payload = state_media_clip(raw)
+                    clip_name = bytes(raw[2:66]).split(b"\x00", 1)[0].decode(
+                        "utf-8", errors="replace"
+                    )
+                    print(
+                        f"[{stamp()}] MEDIA CLIP {clip_id + 1} -> "
+                        f"'{clip_name}' frames="
+                        f"{struct.unpack('!H', raw[66:68])[0]}"
+                    )
 
                 elif cmd_name == "CSBP" and len(body) >= 24:
                     flags = struct.unpack("!H", body[0:2])[0]
