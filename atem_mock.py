@@ -1965,17 +1965,14 @@ def main():
                     locked = body[2] > 0
                     if locked:
                         media_locks.add(lock_index)
-                        # Real ATEM/emulator behavior: grant ownership first,
-                        # then publish the global lock state.
+                        # Capture-backed ATEM emulators show the upload flow as
+                        # LOCK -> LKOB -> FTSD. Do not emit LKST here: Software
+                        # Control waits for the ownership grant before starting
+                        # the transfer.
                         send_state_packet(
                             sock,
                             client,
                             state_lock_obtained(lock_index),
-                        )
-                        send_state_packet(
-                            sock,
-                            client,
-                            state_lock(lock_index, True),
                         )
                     else:
                         media_locks.discard(lock_index)
